@@ -22,7 +22,9 @@ class HyperliquidExchange(Exchange):
 
     async def fetch_instruments(self):
         """读取原生永续 universe，按列表位置保留 asset_id，过滤已下架资产。"""
-        async with self.session.post("https://api.hyperliquid.xyz/info", json={"type": "meta"}) as response:
+        async with self.session.post(
+            "https://api.hyperliquid.xyz/info", json={"type": "meta"}, proxy=self.settings.http_proxy
+        ) as response:
             response.raise_for_status()
             raw = await response.json()
         instruments = []
@@ -62,6 +64,7 @@ class HyperliquidExchange(Exchange):
             self._connected,
             self.invalidate,
             self.settings.request_timeout,
+            proxy=self.settings.wss_proxy,
         )
         await self.transport.start()
 

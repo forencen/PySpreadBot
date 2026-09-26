@@ -5,6 +5,7 @@ import os
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -29,6 +30,8 @@ class Settings:
     take_fraction: Decimal = Decimal("0.2")
     max_age: float = 2.0
     request_timeout: float = 5.0
+    http_proxy: str | None = field(default=None, repr=False)
+    wss_proxy: str | None = field(default=None, repr=False)
     signal_seconds: float = 0.3
     reconcile_seconds: float = 5.0
     metadata_seconds: float = 3600.0
@@ -48,6 +51,22 @@ class Settings:
     def fx(self, quote: str) -> Decimal:
         """获取配置的结算币到 USD 折算率；未知币种直接报错，不默认当成美元。"""
         return {"USDT": self.usdt_usd, "USDC": self.usdc_usd}[quote]
+
+
+def parse_proxy(raw: str, name: str) -> str | None:
+    """把空值或大小写不敏感的 None 转为直连；校验代理 URL，报错不泄露认证信息。"""
+    value = raw.strip()
+    if not value or value.lower() == "none":
+        return None
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError
+        if parsed.port is not None and parsed.port <= 0:
+            raise ValueError
+    except ValueError:
+        raise ValueError(f"{name} must be an http(s) proxy URL, empty or None") from None
+    return value
 
 
 def load_settings(env_file: str | Path = ".env") -> Settings:
@@ -73,7 +92,9 @@ def load_settings(env_file: str | Path = ".env") -> Settings:
         raw = os.getenv(name.upper())
         if raw is None:
             continue
-        if name in decimal_fields:
+        if name in {"http_proxy", "wss_proxy"}:
+            values[name] = parse_proxy(raw, name.upper())
+        elif name in decimal_fields:
             values[name] = Decimal(raw)
         elif name in float_fields:
             values[name] = float(raw)

@@ -27,11 +27,13 @@ class WebSocketTransport:
         invalidated: Callable,
         timeout: float,
         headers: dict | None = None,
+        proxy: str | None = None,
     ):
         """注入解析回调和重连回调，传输层不理解交易所消息格式。"""
         self.session, self.url = session, url
         self.handler, self.connected, self.invalidated = handler, connected, invalidated
         self.timeout, self.headers = timeout, headers
+        self.proxy = proxy
         self.pending: dict[str, asyncio.Future] = {}
         self.ws = None
         self.task = None
@@ -81,7 +83,11 @@ class WebSocketTransport:
             reader = None
             try:
                 async with self.session.ws_connect(
-                    self.url, headers=self.headers, heartbeat=15, max_msg_size=8 * 1024 * 1024
+                    self.url,
+                    headers=self.headers,
+                    heartbeat=15,
+                    max_msg_size=8 * 1024 * 1024,
+                    proxy=self.proxy,
                 ) as ws:
                     self.ws = ws
                     reader = asyncio.create_task(self._read())

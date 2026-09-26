@@ -65,6 +65,15 @@ ALIASES={"gate:1000PEPE_USDT":["PEPE","1000"]}
 
 ## 主要配置
 
+HTTP 和 WSS 代理分别配置，缺省、留空或 `None`（不区分大小写）表示直连：
+
+```dotenv
+HTTP_PROXY=http://127.0.0.1:7890
+WSS_PROXY=http://127.0.0.1:7890
+```
+
+不使用代理时将两项均设为 `None`。WSS 使用 HTTP CONNECT 代理地址，不填写 `wss://`；支持 HTTP 代理，HTTPS 代理支持取决于运行环境，不支持 SOCKS 地址。两个配置互不继承，WSS 重连仍使用其配置的代理。Redis 不受这两个配置影响。
+
 | 项目 | 含义 |
 | --- | --- |
 | `MODE` | `observe` / `paper` / `live`，默认 paper |

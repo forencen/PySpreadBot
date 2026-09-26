@@ -42,7 +42,7 @@ class Exchange(ABC):
     async def initialize(self) -> None:
         """建立异步 HTTP 会话并获取最新规则；元数据可用前不能建立可交易状态。"""
         self.session = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=self.settings.request_timeout)
+            timeout=aiohttp.ClientTimeout(total=self.settings.request_timeout), trust_env=False
         )
         await self.refresh_instruments()
 

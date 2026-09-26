@@ -26,7 +26,9 @@ class GateExchange(Exchange):
 
     async def fetch_instruments(self):
         """读取全部 USDT 合约；张数暂取整张，保留更严格但合法的下单步长。"""
-        async with self.session.get(f"{self.http_url}/futures/usdt/contracts") as response:
+        async with self.session.get(
+            f"{self.http_url}/futures/usdt/contracts", proxy=self.settings.http_proxy
+        ) as response:
             response.raise_for_status()
             raw = await response.json()
         instruments = []
@@ -64,6 +66,7 @@ class GateExchange(Exchange):
             self.invalidate,
             self.settings.request_timeout,
             {"X-Gate-Size-Decimal": "1"},
+            proxy=self.settings.wss_proxy,
         )
         await self.transport.start()
 
@@ -275,7 +278,9 @@ class GateExchange(Exchange):
             "SIGN": signature,
             "X-Gate-Size-Decimal": "1",
         }
-        async with self.session.get("https://api.gateio.ws" + path, headers=headers) as response:
+        async with self.session.get(
+            "https://api.gateio.ws" + path, headers=headers, proxy=self.settings.http_proxy
+        ) as response:
             response.raise_for_status()
             data = await response.json()
         if data.get("mode", "single") != "single":
