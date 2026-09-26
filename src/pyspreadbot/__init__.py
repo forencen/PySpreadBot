@@ -1,0 +1,1 @@
+"""PySpreadBot application package."""
