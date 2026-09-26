@@ -1,6 +1,6 @@
 # PySpreadBot
 
-Python 项目基础骨架，源码放在 `src/pyspreadbot/`，使用 `.env` 管理本地配置。
+Python 项目基础骨架，源码直接放在 `src/`，使用 `.env` 管理本地配置。
 需要 Python 3.11 或更高版本。
 
 ## 快速开始
@@ -15,7 +15,8 @@ cp .env.example .env
 python -m pyspreadbot
 ```
 
-安装后也可以使用 `pyspreadbot` 命令启动。当前入口仅输出启动日志，后续业务代码可添加到 `src/pyspreadbot/`。
+安装后也可以使用 `pyspreadbot` 命令启动。当前入口仅输出启动日志，后续业务代码可添加到 `src/`。
+打包配置将 `src/` 映射为 `pyspreadbot` 包，因此安装后的模块名仍为 `pyspreadbot`。
 
 ## 配置
 
@@ -31,13 +32,21 @@ python -m pyspreadbot
 ## 项目结构
 
 ```text
-src/pyspreadbot/
-  __init__.py
-  __main__.py    # 启动入口
-  config.py      # 配置加载
-.env.example     # 可提交的配置模板
-pyproject.toml   # 项目元数据、依赖和打包配置
-setup.cfg        # 将打包元数据输出到项目根目录
+PySpreadBot/
+├── src/                    # Python 源码，安装为 pyspreadbot 包
+│   ├── __init__.py
+│   ├── __main__.py          # 启动入口
+│   └── config.py            # 配置加载
+├── .env                    # 本地配置，不提交
+├── .env.example            # 配置模板
+├── .gitignore
+├── pyproject.toml          # 项目元数据、依赖及源码映射
+├── setup.cfg               # 打包元数据输出位置
+├── README.md
+├── .venv/                  # 本地虚拟环境，不提交
+├── pyspreadbot.egg-info/    # 生成的打包元数据，不提交
+├── build/                  # 构建时生成的临时目录，不提交
+└── dist/                   # wheel 和源码分发包，不提交
 ```
 
 ## 打包

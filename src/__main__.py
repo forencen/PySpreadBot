@@ -2,7 +2,7 @@
 
 import logging
 
-from pyspreadbot.config import load_settings
+from .config import load_settings
 
 
 def main() -> None:

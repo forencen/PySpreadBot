@@ -13,5 +13,6 @@ dependencies = ["python-dotenv>=1.0,<2.0"]
 [project.scripts]
 pyspreadbot = "pyspreadbot.__main__:main"
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.setuptools]
+packages = ["pyspreadbot"]
+package-dir = {pyspreadbot = "src"}
