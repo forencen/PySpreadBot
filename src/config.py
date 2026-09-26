@@ -1,7 +1,9 @@
-"""Read configuration from environment variables and a local .env file."""
+"""从 .env 加载配置；环境变量优先，启动时拒绝不完整的实盘配置。"""
 
+import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -9,17 +11,110 @@ from dotenv import load_dotenv
 
 @dataclass(frozen=True)
 class Settings:
-    app_name: str
-    log_level: str
+    """运行、风控及连接配置；敏感字段不参与 repr，禁止把 Settings 整体记录到日志。"""
+
+    mode: str = "paper"
+    exchanges: tuple[str, ...] = ("gate", "hyperliquid")
+    symbols: tuple[str, ...] = ("BTC", "ETH")
+    redis_url: str = field(default="redis://localhost:6379/0", repr=False)
+    namespace: str = "pyspreadbot"
+    cache_dir: Path = Path("data/contracts")
+    log_level: str = "INFO"
+    max_notional: Decimal = Decimal("50")
+    entry_bps: Decimal = Decimal("20")
+    midline_bps: Decimal = Decimal("0")
+    slippage_bps: Decimal = Decimal("5")
+    exit_profit: Decimal = Decimal("0.1")
+    stop_loss: Decimal = Decimal("2")
+    take_fraction: Decimal = Decimal("0.2")
+    max_age: float = 2.0
+    request_timeout: float = 5.0
+    signal_seconds: float = 0.3
+    reconcile_seconds: float = 5.0
+    metadata_seconds: float = 3600.0
+    max_positions: int = 3
+    max_depth_subscriptions: int = 20
+    orders_per_minute: int = 30
+    usdt_usd: Decimal = Decimal("1")
+    usdc_usd: Decimal = Decimal("1")
+    gate_fee: Decimal = Decimal("0.0005")
+    hl_fee: Decimal = Decimal("0.00045")
+    gate_key: str = field(default="", repr=False)
+    gate_secret: str = field(default="", repr=False)
+    hl_key: str = field(default="", repr=False)
+    hl_account: str = ""
+    aliases: dict = field(default_factory=dict)
+
+    def fx(self, quote: str) -> Decimal:
+        """获取配置的结算币到 USD 折算率；未知币种直接报错，不默认当成美元。"""
+        return {"USDT": self.usdt_usd, "USDC": self.usdc_usd}[quote]
 
 
 def load_settings(env_file: str | Path = ".env") -> Settings:
-    """Load the specified .env file; existing environment variables take priority."""
-    load_dotenv(dotenv_path=env_file, override=False)
-    log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-    if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
-        raise ValueError("LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR or CRITICAL")
-    return Settings(
-        app_name=os.getenv("APP_NAME", "PySpreadBot"),
-        log_level=log_level,
-    )
+    """读取配置并验证；默认只对 BTC/ETH 模拟交易，SYMBOLS=* 才启用全部共同标的。"""
+    load_dotenv(env_file, override=False)
+    values = {}
+    decimal_fields = {
+        "max_notional",
+        "entry_bps",
+        "midline_bps",
+        "slippage_bps",
+        "exit_profit",
+        "stop_loss",
+        "take_fraction",
+        "usdt_usd",
+        "usdc_usd",
+        "gate_fee",
+        "hl_fee",
+    }
+    float_fields = {"max_age", "request_timeout", "signal_seconds", "reconcile_seconds", "metadata_seconds"}
+    int_fields = {"max_positions", "max_depth_subscriptions", "orders_per_minute"}
+    for name in Settings.__dataclass_fields__:
+        raw = os.getenv(name.upper())
+        if raw is None:
+            continue
+        if name in decimal_fields:
+            values[name] = Decimal(raw)
+        elif name in float_fields:
+            values[name] = float(raw)
+        elif name in int_fields:
+            values[name] = int(raw)
+        elif name in {"symbols", "exchanges"}:
+            values[name] = tuple(x.strip() for x in raw.split(",") if x.strip())
+        elif name == "cache_dir":
+            values[name] = Path(raw)
+        elif name == "aliases":
+            values[name] = json.loads(raw)
+        else:
+            values[name] = raw
+    settings = Settings(**values)
+    if settings.mode not in {"paper", "live", "observe"}:
+        raise ValueError("MODE must be paper, observe or live")
+    for name in decimal_fields - {"midline_bps"}:
+        value = getattr(settings, name)
+        if not value.is_finite() or value < 0:
+            raise ValueError(f"{name} must be finite and nonnegative")
+    if not settings.midline_bps.is_finite():
+        raise ValueError("MIDLINE_BPS must be finite")
+    if settings.slippage_bps >= 10000 or max(settings.gate_fee, settings.hl_fee) >= 1:
+        raise ValueError("SLIPPAGE_BPS must be < 10000 and fee rates must be < 1")
+    if not isinstance(settings.aliases, dict):
+        raise ValueError("ALIASES must be a JSON object")
+    for name in float_fields | int_fields:
+        value = getattr(settings, name)
+        if not 0 < value < float("inf"):
+            raise ValueError(f"{name} must be finite and positive")
+    if (
+        not 0 < settings.take_fraction <= 1
+        or min(settings.usdt_usd, settings.usdc_usd, settings.max_notional) <= 0
+    ):
+        raise ValueError("FX rates, notional and take fraction must be positive; fraction <= 1")
+    if len(set(settings.exchanges)) != len(settings.exchanges) or len(settings.exchanges) < 2:
+        raise ValueError("At least two distinct exchanges required")
+    if not settings.symbols or settings.log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+        raise ValueError("Invalid symbols or log level")
+    if settings.mode == "live" and not all(
+        (settings.gate_key, settings.gate_secret, settings.hl_key, settings.hl_account)
+    ):
+        raise ValueError("Live mode requires GATE_KEY, GATE_SECRET, HL_KEY and HL_ACCOUNT")
+    return settings

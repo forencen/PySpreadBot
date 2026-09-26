@@ -1,18 +1,6 @@
-"""Application entry point."""
+"""支持 python -m pyspreadbot，实际入口在 main.py。"""
 
-import logging
-
-from .config import load_settings
-
-
-def main() -> None:
-    settings = load_settings()
-    logging.basicConfig(
-        level=settings.log_level,
-        format="%(asctime)s %(levelname)s %(message)s",
-    )
-    logging.getLogger(__name__).info("%s started", settings.app_name)
-
+from .main import main
 
 if __name__ == "__main__":
     main()

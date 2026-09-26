@@ -1,0 +1,3 @@
+include .env.example compose.yaml
+recursive-include docs *.md
+recursive-include tests *.py

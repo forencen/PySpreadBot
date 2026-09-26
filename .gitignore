@@ -21,3 +21,7 @@ htmlcov/
 .idea/
 .vscode/
 .DS_Store
+
+# Runtime state and logs
+data/
+logs/
