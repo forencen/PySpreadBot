@@ -37,4 +37,10 @@ src/pyspreadbot/
   config.py      # 配置加载
 .env.example     # 可提交的配置模板
 pyproject.toml   # 项目元数据、依赖和打包配置
+setup.cfg        # 将打包元数据输出到项目根目录
 ```
+
+## 打包
+
+在项目根目录执行 `uv build`，生成的 wheel 和源码分发包放在 `dist/`。
+构建临时文件位于 `build/`，`*.egg-info/` 打包元数据位于项目根目录，均不放入 `src/` 且不提交到 Git。
