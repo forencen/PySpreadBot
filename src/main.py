@@ -9,21 +9,10 @@ import signal
 from dataclasses import replace
 from itertools import combinations
 
-if __package__ in {None, ""}:
-    # 允许在项目根目录直接运行 python src/main.py，不要求把源码目录改名。
-    import sys
-    from pathlib import Path
-
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from src.config import load_settings
-    from src.coordination import Coordinator
-    from src.engine import PairWorker
-    from src.exchange import EXCHANGES, create_exchange
-else:
-    from .config import load_settings
-    from .coordination import Coordinator
-    from .engine import PairWorker
-    from .exchange import EXCHANGES, create_exchange
+from config import load_settings
+from coordination import Coordinator
+from engine import PairWorker
+from exchange import EXCHANGES, create_exchange
 
 
 def worker_entry(settings, names):

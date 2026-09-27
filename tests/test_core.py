@@ -4,12 +4,13 @@ from dataclasses import replace
 from time import monotonic
 
 import pytest
-from pyspreadbot.config import Settings, load_settings
-from pyspreadbot.exchange.base import ValidationError
-from pyspreadbot.exchange.hyperliquid import HyperliquidExchange
-from pyspreadbot.models import Book, D, Instrument, Level, Order, Position, Side
-from pyspreadbot.normalization import normalize
-from pyspreadbot.strategy import ArbitrageStrategy, common_step
+
+from config import Settings, load_settings
+from exchange.base import ValidationError
+from exchange.hyperliquid import HyperliquidExchange
+from models import Book, D, Instrument, Level, Order, Position, Side
+from normalization import normalize
+from strategy import ArbitrageStrategy, common_step
 
 
 def test_explicit_multiplier_and_numbered_asset():

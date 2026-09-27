@@ -2,9 +2,9 @@
 
 from unittest.mock import AsyncMock, Mock
 
-from pyspreadbot.exchange.gate import GateExchange
-from pyspreadbot.exchange.hyperliquid import HyperliquidExchange
-from pyspreadbot.models import D, Instrument, Order, OrderStatus, Side
+from exchange.gate import GateExchange
+from exchange.hyperliquid import HyperliquidExchange
+from models import D, Instrument, Order, OrderStatus, Side
 
 
 def gate(settings):

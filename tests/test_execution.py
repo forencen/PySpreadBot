@@ -3,9 +3,9 @@
 import asyncio
 from dataclasses import replace
 
-from pyspreadbot.execution import ExecutionEngine
-from pyspreadbot.models import D, Order, Side
-from pyspreadbot.strategy import Opportunity
+from execution import ExecutionEngine
+from models import D, Order, Side
+from strategy import Opportunity
 
 
 def opportunity():
@@ -96,7 +96,7 @@ async def test_price_moved_during_account_preflight(venues, settings, coordinato
     """账户核对后价格已变差时，应重新检查并阻止双方下单。"""
     from unittest.mock import AsyncMock
 
-    from pyspreadbot.models import Book, Level
+    from models import Book, Level
 
     original = venues["left"].position
 

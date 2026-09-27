@@ -4,8 +4,8 @@ import asyncio
 import logging
 from time import monotonic
 
-from .exchange.base import ValidationError
-from .models import BPS, Fill, Order, OrderStatus, Position, Side
+from exchange.base import ValidationError
+from models import BPS, Fill, Order, OrderStatus, Position, Side
 
 log = logging.getLogger(__name__)
 

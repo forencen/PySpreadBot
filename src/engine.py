@@ -5,11 +5,11 @@ import logging
 from time import monotonic, time
 from uuid import uuid4
 
-from .coordination import Coordinator
-from .exchange import create_exchange
-from .exchange.base import ValidationError
-from .execution import ExecutionEngine
-from .strategy import ArbitrageStrategy
+from coordination import Coordinator
+from exchange import create_exchange
+from exchange.base import ValidationError
+from execution import ExecutionEngine
+from strategy import ArbitrageStrategy
 
 log = logging.getLogger(__name__)
 

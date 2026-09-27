@@ -1,6 +1,6 @@
 # PySpreadBot
 
-基于 Python 3.11+ / `asyncio` 的跨交易所线性永续合约套利程序。首批接入 Gate USDT 合约和 Hyperliquid 原生 USDC 永续。源码直接放在 `src/`，打包后包名为 `pyspreadbot`。
+基于 Python 3.11+ / `asyncio` 的跨交易所线性永续合约套利程序。首批接入 Gate USDT 合约和 Hyperliquid 原生 USDC 永续。源码直接放在 `src/`，以该目录为导入根目录；发行项目名为 `pyspreadbot`。
 
 默认 `paper`：接收真实行情，在本地模拟成交，不向交易所发送订单。`observe` 只发现机会；`live` 使用真实账户。实盘协议实现已经提供，但未使用真实账户验证签名、权限、余额、费率和成交回报，不能将离线测试视为实盘验收。
 
@@ -32,7 +32,7 @@ uv build                  # 打包至 dist/
 
 ## 单独调试 Gate（PyCharm）
 
-直接运行或 Debug `src/exchange/gate.py`（也可运行 `src/debug_gate.py`），使用项目 `.venv` 解释器即可。默认读取项目根目录 `.env`，单进程持续订阅 BTC 公共行情及深度，沿用 HTTP/WSS 代理，不需要 Redis 或交易密钥，不执行交易。
+将 `src` 标记为 PyCharm 的 Sources Root，并启用将源目录加入 PYTHONPATH，即可直接运行或 Debug `src/exchange/gate.py`（也可运行 `src/debug_gate.py`）。使用项目 `.venv` 解释器。导入统一使用 `from config import ...`、`from exchange.base import ...`，程序不修改 `sys.path`。安装项目后命令行也能直接导入这些模块。默认读取项目根目录 `.env`，单进程持续订阅 BTC 公共行情及深度，沿用 HTTP/WSS 代理，不需要 Redis 或交易密钥，不执行交易。
 
 ```sh
 python src/exchange/gate.py --contracts-only  # 只初始化并缓存合约，适合调试 fetch_instruments
@@ -143,7 +143,7 @@ Redis 必须保持同一命名空间、持久化和 `noeviction`。示例 Compos
 PySpreadBot/
 ├── src/
 │   ├── main.py              # CLI 与两两组合多进程入口
-│   ├── __main__.py          # python -m pyspreadbot 兼容入口
+│   ├── pyspreadbot.py       # python -m pyspreadbot 兼容入口
 │   ├── config.py            # .env 配置与启动校验
 │   ├── models.py            # Instrument / Order / Fill / Book / Position
 │   ├── normalization.py     # 标的别名和单位映射

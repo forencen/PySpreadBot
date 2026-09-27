@@ -8,9 +8,9 @@ from time import monotonic
 
 import aiohttp
 
-from ..cache import ContractCache
-from ..config import Settings
-from ..models import ZERO, Book, D, Fill, Instrument, Order, OrderStatus, Quote, Side
+from cache import ContractCache
+from config import Settings
+from models import ZERO, Book, D, Fill, Instrument, Order, OrderStatus, Quote, Side
 
 
 class ValidationError(ValueError):

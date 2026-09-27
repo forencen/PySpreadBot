@@ -4,11 +4,12 @@ from dataclasses import replace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from pyspreadbot.config import Settings, load_settings, parse_proxy
-from pyspreadbot.exchange.gate import GateExchange
-from pyspreadbot.exchange.hyperliquid import HyperliquidExchange
-from pyspreadbot.models import Instrument
-from pyspreadbot.transport import WebSocketTransport
+
+from config import Settings, load_settings, parse_proxy
+from exchange.gate import GateExchange
+from exchange.hyperliquid import HyperliquidExchange
+from models import Instrument
+from transport import WebSocketTransport
 
 
 @pytest.mark.parametrize("value", ["", "None", "none", " NONE "])

@@ -8,7 +8,7 @@ from dataclasses import asdict
 from pathlib import Path
 from time import time
 
-from .models import Instrument
+from models import Instrument
 
 
 class ContractCache:

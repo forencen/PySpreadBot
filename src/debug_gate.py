@@ -6,15 +6,8 @@ import logging
 from dataclasses import replace
 from pathlib import Path
 
-if __package__ in {None, ""}:
-    import sys
-
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from src.config import load_settings
-    from src.exchange.gate import GateExchange
-else:
-    from .config import load_settings
-    from .exchange.gate import GateExchange
+from config import load_settings
+from exchange.gate import GateExchange
 
 log = logging.getLogger(__name__)
 

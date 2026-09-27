@@ -2,7 +2,7 @@
 
 import re
 
-from .models import D
+from models import D
 
 DEFAULT_ALIASES = {
     "hyperliquid:kPEPE": ("PEPE", "1000"),

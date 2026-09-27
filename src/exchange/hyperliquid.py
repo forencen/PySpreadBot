@@ -2,10 +2,10 @@
 
 from time import time
 
-from ..models import ZERO, Book, D, Fill, Instrument, Level, OrderStatus, Quote
-from ..normalization import normalize
-from ..transport import WebSocketTransport
-from .base import Exchange
+from exchange.base import Exchange
+from models import ZERO, Book, D, Fill, Instrument, Level, OrderStatus, Quote
+from normalization import normalize
+from transport import WebSocketTransport
 
 
 class HyperliquidExchange(Exchange):

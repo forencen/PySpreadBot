@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from math import lcm
 from time import monotonic, time
 
-from .models import BPS, ZERO, D, Order, Position, Side, floor_step
+from models import BPS, ZERO, D, Order, Position, Side, floor_step
 
 
 @dataclass(frozen=True)

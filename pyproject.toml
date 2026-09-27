@@ -19,15 +19,20 @@ dependencies = [
 dev = ["pytest>=8,<10", "pytest-asyncio>=1,<2", "fakeredis[lua]>=2.30,<3", "ruff>=0.12,<1"]
 
 [project.scripts]
-pyspreadbot = "pyspreadbot.main:main"
+pyspreadbot = "main:main"
 
 [tool.setuptools]
-packages = ["pyspreadbot", "pyspreadbot.exchange"]
-package-dir = {pyspreadbot = "src"}
+packages = ["exchange"]
+package-dir = {"" = "src"}
+py-modules = [
+    "main", "pyspreadbot", "debug_gate", "config", "models", "normalization",
+    "cache", "transport", "coordination", "strategy", "execution", "engine",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 110

@@ -5,10 +5,11 @@ from time import monotonic
 
 import fakeredis.aioredis
 import pytest
-from pyspreadbot.config import Settings
-from pyspreadbot.coordination import Coordinator
-from pyspreadbot.exchange.base import Exchange
-from pyspreadbot.models import ZERO, Book, D, Fill, Instrument, Level, OrderStatus, Quote
+
+from config import Settings
+from coordination import Coordinator
+from exchange.base import Exchange
+from models import ZERO, Book, D, Fill, Instrument, Level, OrderStatus, Quote
 
 
 class FakeExchange(Exchange):

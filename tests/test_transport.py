@@ -4,7 +4,8 @@ import asyncio
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from pyspreadbot.transport import Disconnected, WebSocketTransport
+
+from transport import Disconnected, WebSocketTransport
 
 
 def transport():

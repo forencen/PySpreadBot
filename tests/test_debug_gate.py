@@ -6,15 +6,17 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from pyspreadbot.config import Settings, load_settings
-from pyspreadbot.debug_gate import debug_gate
-from pyspreadbot.models import Book, D, Level
+
+from config import Settings, load_settings
+from debug_gate import debug_gate
+from models import Book, D, Level
 
 
 @pytest.mark.parametrize("script", ["src/exchange/gate.py", "src/debug_gate.py"])
-def test_direct_script_imports_from_other_directory(script, tmp_path):
-    """模拟 PyCharm 用文件路径启动，并且工作目录不是项目根目录。"""
+def test_direct_script_imports_from_other_directory(script, tmp_path, monkeypatch):
+    """模拟 PyCharm 将 src 标为 Sources Root 后，以文件路径启动调试。"""
     root = Path(__file__).resolve().parents[1]
+    monkeypatch.setenv("PYTHONPATH", str(root / "src"))
     result = subprocess.run(
         [sys.executable, str(root / script), "--help"],
         cwd=tmp_path,

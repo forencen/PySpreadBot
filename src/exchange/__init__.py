@@ -1,7 +1,7 @@
 """交易所注册表；新增实现后登记名称，运行器自动生成两两组合。"""
 
-from .gate import GateExchange
-from .hyperliquid import HyperliquidExchange
+from exchange.gate import GateExchange
+from exchange.hyperliquid import HyperliquidExchange
 
 EXCHANGES = {"gate": GateExchange, "hyperliquid": HyperliquidExchange}
 
