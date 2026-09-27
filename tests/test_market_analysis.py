@@ -223,3 +223,64 @@ async def test_presubmit_uses_same_history_and_cannot_bypass(venues, settings, c
         is None
     )
     assert not a.sent and not b.sent
+
+
+def test_changing_spread_does_not_require_deviation_from_mean(venues, settings, monkeypatch):
+    """当前价差等于历史均值也可交易，只要历史价差在变化且实际净收益达标。"""
+    now = time()
+    monkeypatch.setattr("market_analysis.time", lambda: now)
+    settings = replace(
+        settings,
+        spread_sample_seconds=1,
+        spread_window_seconds=60,
+        spread_min_samples=3,
+        spread_min_range_bps=D(5),
+    )
+    strategy = ArbitrageStrategy(settings)
+    a, b = venues.values()
+    current = strategy.premium("BTC", a, b)
+    for stamp, offset in zip((now - 4, now - 3, now - 2, now - 1), (-10, 0, 10, 0), strict=True):
+        strategy.history.observe((a.name, b.name, "BTC"), current + offset, stamp)
+    assert strategy.history.baseline((a.name, b.name, "BTC"), now) == current
+    assert strategy.candidate("BTC", a, b)
+    assert strategy.opportunity("BTC", a, b) is not None
+    # 小幅报价噪声不算有效变化。
+    strategy.settings = replace(settings, spread_min_range_bps=D(25))
+    strategy.history.settings = strategy.settings
+    assert not strategy.candidate("BTC", a, b)
+
+
+async def test_sqlite_history_survives_reopen_and_deduplicates(tmp_path, settings):
+    """SQLite 保留历史、不同 DEX 隔离，同一采样键重复写入只保留一份。"""
+    import asyncio
+    import sqlite3
+
+    from spread_store import SpreadStore
+
+    settings = replace(settings, spread_db_path=tmp_path / "spreads.sqlite3")
+    record = {
+        "left": "gate",
+        "right": "hyperliquid:xyz",
+        "base": "HOOD",
+        "sample_at": 100,
+        "spread_bps": D("10.123456789"),
+        "mean_bps": D(10),
+        "min_bps": D(9),
+        "max_bps": D(11),
+        "range_bps": D(2),
+        "samples": 3,
+        "timestamp": 110,
+    }
+    await SpreadStore(settings).save([record])
+    await asyncio.gather(
+        SpreadStore(settings).save([record]),
+        SpreadStore(settings).save([{**record, "right": "hyperliquid:io"}]),
+    )
+    connection = sqlite3.connect(settings.spread_db_path)
+    try:
+        rows = connection.execute(
+            "SELECT right_exchange, spread_bps FROM spread_samples ORDER BY right_exchange"
+        ).fetchall()
+        assert rows == [("hyperliquid:io", "10.123456789"), ("hyperliquid:xyz", "10.123456789")]
+    finally:
+        connection.close()

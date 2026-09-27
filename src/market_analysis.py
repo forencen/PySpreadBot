@@ -71,6 +71,7 @@ class SpreadHistory:
                     "min_bps": min(values),
                     "max_bps": max(values),
                     "samples": len(values),
+                    "range_bps": max(values) - min(values),
                     "timestamp": now,
                 }
         if previous is None or previous[0] != bucket:
@@ -87,6 +88,21 @@ class SpreadHistory:
         if now - rows[-1][0] > self.settings.spread_sample_seconds * 3:
             return None
         return mean(values)
+
+    def changing(self, key, current, now=None):
+        """只有近期有效样本与当前值的极差超过阈值才放行，不要求偏离均值。
+
+        当前值参与变化检查可及时识别新变化；样本数/新鲜度仍只依赖历史已完成桶。
+        极差阈值用于排除小幅报价噪声，不能据此保证未来价差会收敛。
+        """
+        now = time() if now is None else now
+        if current is None or self.baseline(key, now) is None:
+            return False
+        values = [
+            value for stamp, value in self.rows[key] if stamp >= now - self.settings.spread_window_seconds
+        ]
+        values.append(current)
+        return max(values) - min(values) > self.settings.spread_min_range_bps
 
 
 def reverse_premium(premium):

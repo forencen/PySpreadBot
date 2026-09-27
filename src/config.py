@@ -30,6 +30,8 @@ class Settings:
     spread_sample_seconds: float = 10.0
     spread_window_seconds: float = 3600.0
     spread_min_samples: int = 60
+    spread_min_range_bps: Decimal = Decimal("5")
+    spread_db_path: Path = Path("data/spreads.sqlite3")
     slippage_bps: Decimal = Decimal("5")
     exit_profit: Decimal = Decimal("0.1")
     stop_loss: Decimal = Decimal("2")
@@ -91,6 +93,7 @@ def load_settings(env_file: str | Path = ".env", *, mode: str | None = None) -> 
         "entry_bps",
         "midline_bps",
         "funding_horizon_hours",
+        "spread_min_range_bps",
         "slippage_bps",
         "exit_profit",
         "stop_loss",
@@ -125,7 +128,7 @@ def load_settings(env_file: str | Path = ".env", *, mode: str | None = None) -> 
             values[name] = int(raw)
         elif name in {"symbols", "exchanges", "hl_dexs"}:
             values[name] = tuple(x.strip() for x in raw.split(",") if x.strip())
-        elif name == "cache_dir":
+        elif name in {"cache_dir", "spread_db_path"}:
             values[name] = Path(raw)
         elif name in {"aliases", "hl_dex_fees", "quote_usd_rates"}:
             values[name] = json.loads(raw)

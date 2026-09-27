@@ -29,7 +29,7 @@ class ArbitrageStrategy:
     """按可成交净价差选择方向，非零中枢按交易所组合固定顺序解释。"""
 
     def __init__(self, settings):
-        """保存门槛和等时间采样的价差历史；手动中枢作为历史中枢的附加偏移。"""
+        """保存门槛与等时间采样历史；历史仅判断价差是否变化，不从盈利中扣除均值。"""
         self.settings = settings
         self.history = SpreadHistory(settings)
 
@@ -58,14 +58,15 @@ class ArbitrageStrategy:
         return self.history.observe((left.name, right.name, base), premium)
 
     def baseline(self, base, left, right):
-        """获得历史均值加手动偏移；预热不充分时返回 None，禁止新开仓。"""
-        if not self.settings.spread_window_seconds:
-            return self.settings.midline_bps
-        value = self.history.baseline((left.name, right.name, base))
-        return None if value is None else value + self.settings.midline_bps
+        """固定中枢保持 MIDLINE_BPS 配置；历史只作变化过滤，不自动变成中枢。"""
+        if self.settings.spread_window_seconds and not self.history.changing(
+            (left.name, right.name, base), self.premium(base, left, right)
+        ):
+            return None
+        return self.settings.midline_bps
 
     def candidate(self, base, left, right) -> bool:
-        """轻量报价偏离自身历史基准才订阅深度；资金费在深度阶段获取并校验。"""
+        """历史确认价差在变化且当前价差达到候选门槛才订阅深度。"""
         premium, baseline = self.premium(base, left, right), self.baseline(base, left, right)
         return (
             premium is not None

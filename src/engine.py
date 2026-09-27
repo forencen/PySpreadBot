@@ -9,6 +9,7 @@ from coordination import Coordinator
 from exchange import create_exchange
 from exchange.base import ValidationError
 from execution import ExecutionEngine
+from spread_store import SpreadStore
 from strategy import ArbitrageStrategy
 
 log = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ class PairWorker:
         self.coordinator = Coordinator(settings.redis_url, settings.namespace, settings.mode)
         self.exchanges = {name: create_exchange(name, settings, self.coordinator) for name in names}
         self.strategy = ArbitrageStrategy(settings)
+        self.spread_store = SpreadStore(settings)
         self.execution = ExecutionEngine(
             settings, self.exchanges, self.coordinator, self.owner, self.strategy
         )
@@ -63,11 +65,13 @@ class PairWorker:
                 await self._wait_for_market()
                 await self._maintenance()
                 await self._manage_positions()
+                samples = []
                 for base in sorted(common):
                     if base not in left.instruments or base not in right.instruments:
                         continue
                     stats = self.strategy.observe(base, left, right)
                     if stats is not None:
+                        samples.append({"left": left.name, "right": right.name, "base": base, **stats})
                         await self.coordinator.save_spread(
                             left.name,
                             right.name,
@@ -112,6 +116,7 @@ class PairWorker:
                     else:
                         await self.execution.open(opportunity)
                         self.armed.pop(base, None)
+                await self.spread_store.save(samples)
         finally:
             for venue in self.exchanges.values():
                 await venue.close()
