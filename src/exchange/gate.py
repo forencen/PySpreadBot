@@ -5,10 +5,20 @@ import hmac
 from time import monotonic, time
 from uuid import uuid4
 
-from ..models import Book, D, Fill, Instrument, Level, Order, OrderStatus, Quote
-from ..normalization import normalize
-from ..transport import WebSocketTransport
-from .base import Exchange, ValidationError
+if __package__ in {None, ""}:
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from src.exchange.base import Exchange, ValidationError
+    from src.models import Book, D, Fill, Instrument, Level, Order, OrderStatus, Quote
+    from src.normalization import normalize
+    from src.transport import WebSocketTransport
+else:
+    from ..models import Book, D, Fill, Instrument, Level, Order, OrderStatus, Quote
+    from ..normalization import normalize
+    from ..transport import WebSocketTransport
+    from .base import Exchange, ValidationError
 
 
 class GateExchange(Exchange):
@@ -27,7 +37,7 @@ class GateExchange(Exchange):
     async def fetch_instruments(self):
         """读取全部 USDT 合约；张数暂取整张，保留更严格但合法的下单步长。"""
         async with self.session.get(
-            f"{self.http_url}/futures/usdt/contracts", proxy=self.settings.http_proxy
+                f"{self.http_url}/futures/usdt/contracts", proxy=self.settings.http_proxy
         ) as response:
             response.raise_for_status()
             raw = await response.json()
@@ -91,7 +101,7 @@ class GateExchange(Exchange):
         natives = [self.instruments[base].native for base in sorted(self.symbols)]
         for offset in range(0, len(natives), 50):
             for channel in ("futures.book_ticker", "futures.tickers"):
-                await self._subscription(channel, natives[offset : offset + 50])
+                await self._subscription(channel, natives[offset: offset + 50])
         for base in sorted(self.depth):
             await self._subscription("futures.obu", [self._stream(base)])
 
@@ -279,7 +289,7 @@ class GateExchange(Exchange):
             "X-Gate-Size-Decimal": "1",
         }
         async with self.session.get(
-            "https://api.gateio.ws" + path, headers=headers, proxy=self.settings.http_proxy
+                "https://api.gateio.ws" + path, headers=headers, proxy=self.settings.http_proxy
         ) as response:
             response.raise_for_status()
             data = await response.json()
@@ -298,3 +308,12 @@ class GateExchange(Exchange):
             },
         )
         return bool(orders)
+
+
+if __name__ == "__main__":
+    if __package__ in {None, ""}:
+        from src.debug_gate import main
+    else:
+        from ..debug_gate import main
+
+    main(exchange_type=GateExchange)

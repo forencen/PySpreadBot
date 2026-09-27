@@ -69,7 +69,7 @@ def parse_proxy(raw: str, name: str) -> str | None:
     return value
 
 
-def load_settings(env_file: str | Path = ".env") -> Settings:
+def load_settings(env_file: str | Path = ".env", *, mode: str | None = None) -> Settings:
     """读取配置并验证；默认只对 BTC/ETH 模拟交易，SYMBOLS=* 才启用全部共同标的。"""
     load_dotenv(env_file, override=False)
     values = {}
@@ -108,6 +108,8 @@ def load_settings(env_file: str | Path = ".env") -> Settings:
             values[name] = json.loads(raw)
         else:
             values[name] = raw
+    if mode is not None:
+        values["mode"] = mode
     settings = Settings(**values)
     if settings.mode not in {"paper", "live", "observe"}:
         raise ValueError("MODE must be paper, observe or live")
@@ -130,8 +132,9 @@ def load_settings(env_file: str | Path = ".env") -> Settings:
         or min(settings.usdt_usd, settings.usdc_usd, settings.max_notional) <= 0
     ):
         raise ValueError("FX rates, notional and take fraction must be positive; fraction <= 1")
-    if len(set(settings.exchanges)) != len(settings.exchanges) or len(settings.exchanges) < 2:
-        raise ValueError("At least two distinct exchanges required")
+    minimum = 1 if settings.mode == "observe" else 2
+    if len(set(settings.exchanges)) != len(settings.exchanges) or len(settings.exchanges) < minimum:
+        raise ValueError(f"At least {minimum} distinct exchanges required")
     if not settings.symbols or settings.log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
         raise ValueError("Invalid symbols or log level")
     if settings.mode == "live" and not all(

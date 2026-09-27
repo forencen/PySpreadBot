@@ -30,6 +30,18 @@ uv build                  # 打包至 dist/
 
 初始监控 `BTC,ETH`，修改 `SYMBOLS=*` 可监控双方所有共同标的。`cache` 获取全部受支持合约的规则，不受 `SYMBOLS` 过滤。规则写入 `data/contracts/gate.json` 和 `hyperliquid.json`，同时保存规范字段和原始响应。启动和定期刷新必须成功取得新规则；旧缓存用于检查，不用于离线实盘下单。
 
+## 单独调试 Gate（PyCharm）
+
+直接运行或 Debug `src/exchange/gate.py`（也可运行 `src/debug_gate.py`），使用项目 `.venv` 解释器即可。默认读取项目根目录 `.env`，单进程持续订阅 BTC 公共行情及深度，沿用 HTTP/WSS 代理，不需要 Redis 或交易密钥，不执行交易。
+
+```sh
+python src/exchange/gate.py --contracts-only  # 只初始化并缓存合约，适合调试 fetch_instruments
+python src/exchange/gate.py --symbol BTC      # 持续接收，适合在 handle_message 中打断点
+python src/exchange/gate.py --symbol BTC --once  # 收到首个新鲜盘口后退出
+```
+
+PyCharm 的 Parameters 可填写上述选项。该入口强制 `observe`，即使 `.env` 配置 `MODE=live` 也只读；Ctrl+C 时清理连接。暂停断点可能触发 WSS 心跳超时，继续运行后会自动重连。
+
 ## 数据与执行流程
 
 1. 读取合约元数据：最小/最大数量、数量步长、合约乘数、价格精度、下架状态、价格偏离限制等。
