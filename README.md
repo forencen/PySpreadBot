@@ -1,6 +1,6 @@
 # PySpreadBot
 
-基于 Python 3.11+ / `asyncio` 的跨交易所线性永续合约套利程序。首批接入 Gate USDT 合约和 Hyperliquid 原生 USDC 永续。源码直接放在 `src/`，以该目录为导入根目录；发行项目名为 `pyspreadbot`。
+基于 Python 3.11+ / `asyncio` 的跨交易所线性永续合约套利程序。接入 Gate USDT 合约、Hyperliquid 原生 USDC 永续及 HIP-3 部署方永续市场。源码直接放在 `src/`，以该目录为导入根目录；发行项目名为 `pyspreadbot`。
 
 默认 `paper`：接收真实行情，在本地模拟成交，不向交易所发送订单。`observe` 只发现机会；`live` 使用真实账户。实盘协议实现已经提供，但未使用真实账户验证签名、权限、余额、费率和成交回报，不能将离线测试视为实盘验收。
 
@@ -22,7 +22,7 @@ python src/main.py run
 
 ```sh
 python src/main.py status  # 查看全局归属、持仓及预计平仓 PnL
-python src/main.py probe   # 只读验证两个交易所的 BTC WSS 行情和深度，无需 Redis/密钥
+python src/main.py probe   # 只读验证启用市场的 WSS 行情和深度，无需 Redis/密钥
 pytest -q                 # 离线测试，不连接交易所、不下单
 ruff check src tests
 uv build                  # 打包至 dist/
@@ -32,12 +32,12 @@ uv build                  # 打包至 dist/
 
 ## 单独调试 Gate（PyCharm）
 
-将 `src` 标记为 PyCharm 的 Sources Root，并启用将源目录加入 PYTHONPATH，即可直接运行或 Debug `src/exchange/gate.py`（也可运行 `src/debug_gate.py`）。使用项目 `.venv` 解释器。导入统一使用 `from config import ...`、`from exchange.base import ...`，程序不修改 `sys.path`。安装项目后命令行也能直接导入这些模块。默认读取项目根目录 `.env`，单进程持续订阅 BTC 公共行情及深度，沿用 HTTP/WSS 代理，不需要 Redis 或交易密钥，不执行交易。
+将 `src` 标记为 PyCharm 的 Sources Root，并启用将源目录加入 PYTHONPATH，即可运行或 Debug `src/debug_gate.py`。`src/exchange/gate.py` 末尾可保留自定义调试代码。使用项目 `.venv` 解释器。导入统一使用 `from config import ...`、`from exchange.base import ...`，程序不修改 `sys.path`。安装项目后命令行也能直接导入这些模块。默认读取项目根目录 `.env`，单进程持续订阅 BTC 公共行情及深度，沿用 HTTP/WSS 代理，不需要 Redis 或交易密钥，不执行交易。
 
 ```sh
-python src/exchange/gate.py --contracts-only  # 只初始化并缓存合约，适合调试 fetch_instruments
-python src/exchange/gate.py --symbol BTC      # 持续接收，适合在 handle_message 中打断点
-python src/exchange/gate.py --symbol BTC --once  # 收到首个新鲜盘口后退出
+python src/debug_gate.py --contracts-only  # 只初始化并缓存合约，适合调试 fetch_instruments
+python src/debug_gate.py --symbol BTC      # 持续接收，适合在 handle_message 中打断点
+python src/debug_gate.py --symbol BTC --once  # 收到首个新鲜盘口后退出
 ```
 
 PyCharm 的 Parameters 可填写上述选项。该入口强制 `observe`，即使 `.env` 配置 `MODE=live` 也只读；Ctrl+C 时清理连接。暂停断点可能触发 WSS 心跳超时，继续运行后会自动重连。
@@ -74,6 +74,40 @@ ALIASES={"gate:1000PEPE_USDT":["PEPE","1000"]}
 - 两边基础币步长使用最小公倍数计算，不直接取较大的步长。
 
 汇率在进程启动时读取，不自动采集 FX，也不在持仓中途热更新。`.env.example` 的两个 `1` 是默认示例；请填写需要的折算率。运行期 PnL 使用这组固定折算率。
+
+## Hyperliquid HIP-3
+
+每个部署方市场使用独立标识，如 `hyperliquid:xyz`、`hyperliquid:io`。默认启用 `xyz`；其他部署方可加入 `HL_DEXS`，或用 `*` 在启动时发现全部市场。空值表示只启用原生永续。也可用 `EXCHANGES=gate,hyperliquid:xyz` 仅运行指定组合。
+
+```dotenv
+EXCHANGES=gate,hyperliquid
+HL_DEXS=xyz,io
+# 同时关注原生币和已确认可配对的 HIP-3 标的
+SYMBOLS=BTC,ETH,TSLA
+HL_HIP3_FEE=0.001
+HL_DEX_FEES={}
+QUOTE_USD_RATES={}
+# 确认资产、指数及单位等价后，把所需映射合并进已有 ALIASES
+ALIASES={"hyperliquid:xyz:TSLA":["TSLA","1"]}
+```
+
+以上会创建 Gate/原生、Gate/xyz、Gate/io 三个组合；不创建 Hyperliquid 内部市场间套利组合。没有共同配置标的的组合正常跳过，其他组合继续运行。默认 HIP-3 名称保留命名空间，例如 `XYZ:TSLA`；未配置别名时不会自动与 Gate 的 `TSLA` 配对。股票、商品等也需要对端存在且确认经济含义相同，才能配置配对。
+
+合约发现读取 `perpDexs`、指定 DEX 的 `meta` 和 `spotMeta`，保存真实抵押币、保证金模式、最大杠杆及下单资产编号。编号使用 `100000 + DEX 原始索引 × 10000 + 合约原始索引`，保留空槽和下架合约的位置。缓存分别写入 `hyperliquid.json`、`hyperliquid__xyz.json` 等文件。
+
+`allMids` 订阅带 DEX，`l2Book` 使用 `xyz:TSLA` 等完整名称；下单沿用 WSS 签名 IOC。仓位和活动订单查询指定 DEX，查单与成交历史按全局订单 ID 查询。所有市场共享钱包 nonce、Hyperliquid 订单限额和基础币 Redis 归属；同一个 BTC 不能同时被多个组合开仓。
+
+USDT/USDC 沿用现有汇率配置，其他抵押币或手续费币种通过 `QUOTE_USD_RATES` 配置。未知抵押币的合约会缓存但禁用。`HL_HIP3_FEE` 仅提供观察/模拟估算，实盘必须在 `HL_DEX_FEES` 中填写每个启用 DEX 的账户实际 taker 费率，例如 `{"xyz":"0.0009"}`（仅展示格式）。程序不自动跨 DEX 转移抵押资产或修改杠杆/保证金模式，账户需要事先具备所需资金和设置。
+
+单独验证 HIP-3，无需 Redis 或私钥：
+
+```sh
+python src/main.py cache --exchange hyperliquid:xyz
+# 未配置 TSLA 别名时使用 XYZ:TSLA；已映射时使用 TSLA
+python src/main.py probe --exchange hyperliquid:xyz --symbol XYZ:TSLA
+```
+
+协议依据：[资产编号](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/asset-ids)、[永续元数据](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/perpetuals)、[WSS 订阅](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/websocket/subscriptions)。
 
 ## 主要配置
 

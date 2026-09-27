@@ -31,6 +31,7 @@ class ContractCache:
     def _write(self, exchange: str, payload: dict) -> None:
         """在同目录创建临时文件并原子重命名；finally 清除失败写入的临时文件。"""
         self.directory.mkdir(parents=True, exist_ok=True)
+        exchange = exchange.replace(":", "__")
         fd, name = tempfile.mkstemp(dir=self.directory, prefix=f".{exchange}-", suffix=".tmp")
         try:
             with os.fdopen(fd, "w") as stream:

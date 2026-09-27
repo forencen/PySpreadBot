@@ -19,6 +19,10 @@ class PairWorker:
 
     def __init__(self, settings, names):
         """生成唯一进程 owner；重启不会继承旧 owner，以免误接管未知仓位。"""
+        from dataclasses import replace
+
+        # 中枢方向按当前组合定义，不能沿用其他组合的第一个交易所。
+        settings = replace(settings, exchanges=tuple(names))
         self.settings, self.names = settings, names
         self.owner = ":".join(names) + ":" + uuid4().hex
         self.coordinator = Coordinator(settings.redis_url, settings.namespace, settings.mode)
@@ -40,7 +44,10 @@ class PairWorker:
             if self.settings.symbols != ("*",):
                 common &= set(self.settings.symbols)
             if not common:
-                raise ValueError("No common configured instruments")
+                log.info(
+                    "Pair %s skipped: no common configured instruments; check SYMBOLS/ALIASES", self.names
+                )
+                return
             for venue in self.exchanges.values():
                 await venue.connect(common)
             log.info("Pair %s: %d common instruments; mode=%s", self.names, len(common), self.settings.mode)

@@ -22,6 +22,11 @@ class Exchange(ABC):
 
     name: str
 
+    @property
+    def rate_limit_key(self) -> str:
+        """返回共享订单限额桶；同一交易所的多个市场可覆盖此属性共用额度。"""
+        return self.name
+
     def __init__(self, settings: Settings, coordinator=None):
         """创建内存状态；每个工作进程独立连接，Redis 协调跨进程状态。"""
         self.settings, self.coordinator = settings, coordinator
@@ -156,7 +161,7 @@ class Exchange(ABC):
             return self.paper_fill(order)
         if self.coordinator is None:
             raise ValidationError("Live orders require global coordination")
-        if not await self.coordinator.order_budget(self.name, self.settings.orders_per_minute):
+        if not await self.coordinator.order_budget(self.rate_limit_key, self.settings.orders_per_minute):
             return Fill(order, OrderStatus.REJECTED, reason="Global rate budget exhausted")
         try:
             return await self.place_live(order)

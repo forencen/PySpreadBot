@@ -7,12 +7,11 @@ import logging
 import multiprocessing as mp
 import signal
 from dataclasses import replace
-from itertools import combinations
 
 from config import load_settings
 from coordination import Coordinator
 from engine import PairWorker
-from exchange import EXCHANGES, create_exchange
+from exchange import create_exchange, exchange_pairs, resolve_exchanges, supports_exchange
 
 
 def worker_entry(settings, names):
@@ -31,14 +30,18 @@ def run_processes(settings):
     context = mp.get_context("spawn")
     workers = [
         context.Process(target=worker_entry, args=(settings, pair), name="-".join(pair))
-        for pair in combinations(settings.exchanges, 2)
+        for pair in exchange_pairs(settings.exchanges)
     ]
+    if not workers:
+        raise ValueError("No cross-exchange pairs configured")
     try:
         for process in workers:
             process.start()
-        while all(process.is_alive() for process in workers):
+        while any(process.is_alive() for process in workers):
             for process in workers:
                 process.join(timeout=0.2)
+            if any(process.exitcode not in (None, 0) for process in workers):
+                raise RuntimeError("Worker failed; inspect Redis status before restarting")
         if any(process.exitcode not in (None, 0) for process in workers):
             raise RuntimeError("Worker failed; inspect Redis status before restarting")
     finally:
@@ -56,7 +59,7 @@ def run_processes(settings):
                     process.join(timeout=2)
 
 
-async def command(settings, name):
+async def command(settings, name, symbol=None):
     """执行非交易命令：刷新规则、探测公共行情或读取状态，不创建任何真实订单。"""
     if name == "status":
         coordinator = Coordinator(settings.redis_url, settings.namespace, settings.mode)
@@ -72,7 +75,16 @@ async def command(settings, name):
                 await venue.initialize()
                 print(f"{exchange_name}: {len(venue.instruments)} active contracts cached")
                 if name == "probe":
-                    base = "BTC"
+                    if not venue.instruments:
+                        print(
+                            f"{exchange_name}: no enabled contracts; check collateral FX and listing status"
+                        )
+                        continue
+                    base = symbol or next(
+                        (s for s in settings.symbols if s in venue.instruments), next(iter(venue.instruments))
+                    )
+                    if base not in venue.instruments:
+                        raise ValueError(f"{exchange_name}: unknown normalized symbol {base}")
                     await venue.connect({base})
                     await venue.subscribe_depth(base)
                     async with asyncio.timeout(30):
@@ -93,17 +105,25 @@ def main():
     parser = argparse.ArgumentParser(description="Async multi-exchange perpetual arbitrage")
     parser.add_argument("command", choices=["run", "cache", "probe", "status"], nargs="?", default="run")
     parser.add_argument("--env", default=".env", help="Configuration file path")
+    parser.add_argument("--exchange", help="Single market for cache/probe, e.g. hyperliquid:xyz")
+    parser.add_argument("--symbol", help="Normalized base symbol for probe, e.g. XYZ:TSLA or mapped TSLA")
     args = parser.parse_args()
-    settings = load_settings(args.env)
-    unknown = set(settings.exchanges) - set(EXCHANGES)
+    settings = load_settings(args.env, mode="observe" if args.command in {"cache", "probe"} else None)
+    if args.exchange:
+        if args.command not in {"cache", "probe"}:
+            parser.error("--exchange is only supported for cache/probe")
+        settings = replace(settings, exchanges=(args.exchange,), hl_dexs=())
+    unknown = {name for name in settings.exchanges if not supports_exchange(name)}
     if unknown:
         parser.error(f"Unknown exchanges: {sorted(unknown)}")
     logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(message)s")
     try:
+        if args.command != "status":
+            settings = asyncio.run(resolve_exchanges(settings))
         if args.command == "run":
             run_processes(settings)
         else:
-            asyncio.run(command(settings, args.command))
+            asyncio.run(command(settings, args.command, args.symbol))
     except KeyboardInterrupt:
         logging.info("Stopped; open positions retain their Redis ownership")
 

@@ -14,7 +14,7 @@
 
 `Order.limit_price` 是每个真实基础币的 USD 估值。适配器转回原始价格后校验 tick。买入限价向下取整、卖出限价向上取整，不能因舍入扩大价格保护范围。Hyperliquid 额外校验五位有效数字和 `6-szDecimals` 小数限制。Gate 当前只下整数张，可能比交易所实际支持的分数张更保守。
 
-别名只按明确的 `exchange:native` 配置，不通过正则猜测千倍币。添加别名前需确认两所实际资产和指数含义相同；名称相同不构成经济等价证明。当前只接入 Gate USDT 线性合约及 Hyperliquid 原生 USDC 永续，不支持反向、交割和 HIP-3。
+别名只按明确的 `exchange:native` 配置，不通过正则猜测千倍币。添加别名前需确认两所实际资产和指数含义相同；名称相同不构成经济等价证明。接入 Gate USDT 线性合约、Hyperliquid 原生永续及 HIP-3。HIP-3 每个 DEX 独立实例，保留完整原生名称与实际抵押币，显式别名才允许跨所匹配；不支持反向及交割合约。
 
 ## 订单与持仓状态
 
@@ -74,3 +74,11 @@ PNL 是固定 FX 折算的交易现金流估值，费用主要按配置 taker �
 - [Hyperliquid 价格和数量精度](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/tick-and-lot-size)
 - [Hyperliquid 官方签名 SDK](https://github.com/hyperliquid-dex/hyperliquid-python-sdk)
 - [策略参考 entropy-arb](https://github.com/your-quantguy/entropy-arb/blob/main/README.zh-CN.md)
+
+## HIP-3 市场身份
+
+`hyperliquid:dex` 是运行器、订单、持仓和缓存中的独立市场身份；`hyperliquid` 保留原生语义。运行器展开 `HL_DEXS` 并只创建不同交易所家族的组合。每个组合使用自己的有序交易所列表计算溢价中枢，无共同标的的进程正常退出。
+
+部署方的元数据和账户查询必须携带 dex；深度与成交匹配使用完整 coin。资产 ID 在原始数组上计算，不能先过滤下架项目或空 DEX 槽位。刷新时身份变化使行情失效并要求重新核对。抵押币通过 collateralToken 与 spotMeta 的 token index 关联，不假定为 USDC。无折算率的合约禁用，实盘缺少对应 DEX 费率则预校验失败。
+
+不同 DEX 使用相同签名钱包时共享 Redis nonce；所有 Hyperliquid 市场共用订单预算桶。基础币别名统一后沿用原有全局归属，不按 DEX 拆锁。费用按成交 feeToken 折算；未知手续费币种保持 UNKNOWN，不确认对账完成。资金划转、杠杆配置及资金费收益不属于本次接入范围。

@@ -42,6 +42,10 @@ class Settings:
     usdc_usd: Decimal = Decimal("1")
     gate_fee: Decimal = Decimal("0.0005")
     hl_fee: Decimal = Decimal("0.00045")
+    hl_dexs: tuple[str, ...] = ("xyz",)
+    hl_hip3_fee: Decimal = Decimal("0.001")
+    hl_dex_fees: dict = field(default_factory=dict)
+    quote_usd_rates: dict = field(default_factory=dict)
     gate_key: str = field(default="", repr=False)
     gate_secret: str = field(default="", repr=False)
     hl_key: str = field(default="", repr=False)
@@ -50,6 +54,8 @@ class Settings:
 
     def fx(self, quote: str) -> Decimal:
         """获取配置的结算币到 USD 折算率；未知币种直接报错，不默认当成美元。"""
+        if quote in self.quote_usd_rates:
+            return Decimal(str(self.quote_usd_rates[quote]))
         return {"USDT": self.usdt_usd, "USDC": self.usdc_usd}[quote]
 
 
@@ -85,6 +91,7 @@ def load_settings(env_file: str | Path = ".env", *, mode: str | None = None) -> 
         "usdc_usd",
         "gate_fee",
         "hl_fee",
+        "hl_hip3_fee",
     }
     float_fields = {"max_age", "request_timeout", "signal_seconds", "reconcile_seconds", "metadata_seconds"}
     int_fields = {"max_positions", "max_depth_subscriptions", "orders_per_minute"}
@@ -100,11 +107,11 @@ def load_settings(env_file: str | Path = ".env", *, mode: str | None = None) -> 
             values[name] = float(raw)
         elif name in int_fields:
             values[name] = int(raw)
-        elif name in {"symbols", "exchanges"}:
+        elif name in {"symbols", "exchanges", "hl_dexs"}:
             values[name] = tuple(x.strip() for x in raw.split(",") if x.strip())
         elif name == "cache_dir":
             values[name] = Path(raw)
-        elif name == "aliases":
+        elif name in {"aliases", "hl_dex_fees", "quote_usd_rates"}:
             values[name] = json.loads(raw)
         else:
             values[name] = raw
@@ -119,10 +126,22 @@ def load_settings(env_file: str | Path = ".env", *, mode: str | None = None) -> 
             raise ValueError(f"{name} must be finite and nonnegative")
     if not settings.midline_bps.is_finite():
         raise ValueError("MIDLINE_BPS must be finite")
-    if settings.slippage_bps >= 10000 or max(settings.gate_fee, settings.hl_fee) >= 1:
+    if settings.slippage_bps >= 10000 or max(settings.gate_fee, settings.hl_fee, settings.hl_hip3_fee) >= 1:
         raise ValueError("SLIPPAGE_BPS must be < 10000 and fee rates must be < 1")
     if not isinstance(settings.aliases, dict):
         raise ValueError("ALIASES must be a JSON object")
+    for name in ("hl_dex_fees", "quote_usd_rates"):
+        mapping = getattr(settings, name)
+        if not isinstance(mapping, dict):
+            raise ValueError(f"{name.upper()} must be a JSON object")
+        for key, raw in mapping.items():
+            value = Decimal(str(raw))
+            if not value.is_finite() or (not 0 <= value < 1 if name == "hl_dex_fees" else value <= 0):
+                raise ValueError(f"Invalid {name.upper()} value for {key}")
+    if len(settings.hl_dexs) != len(set(settings.hl_dexs)) or (
+        "*" in settings.hl_dexs and settings.hl_dexs != ("*",)
+    ):
+        raise ValueError("HL_DEXS must contain distinct dex names or a single *")
     for name in float_fields | int_fields:
         value = getattr(settings, name)
         if not 0 < value < float("inf"):
@@ -137,8 +156,11 @@ def load_settings(env_file: str | Path = ".env", *, mode: str | None = None) -> 
         raise ValueError(f"At least {minimum} distinct exchanges required")
     if not settings.symbols or settings.log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
         raise ValueError("Invalid symbols or log level")
-    if settings.mode == "live" and not all(
-        (settings.gate_key, settings.gate_secret, settings.hl_key, settings.hl_account)
-    ):
-        raise ValueError("Live mode requires GATE_KEY, GATE_SECRET, HL_KEY and HL_ACCOUNT")
+    if settings.mode == "live":
+        if "gate" in settings.exchanges and not all((settings.gate_key, settings.gate_secret)):
+            raise ValueError("Live Gate requires GATE_KEY and GATE_SECRET")
+        if any(name.split(":", 1)[0] == "hyperliquid" for name in settings.exchanges) and not all(
+            (settings.hl_key, settings.hl_account)
+        ):
+            raise ValueError("Live Hyperliquid requires HL_KEY and HL_ACCOUNT")
     return settings

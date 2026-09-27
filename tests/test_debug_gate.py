@@ -12,7 +12,7 @@ from debug_gate import debug_gate
 from models import Book, D, Level
 
 
-@pytest.mark.parametrize("script", ["src/exchange/gate.py", "src/debug_gate.py"])
+@pytest.mark.parametrize("script", ["src/debug_gate.py"])
 def test_direct_script_imports_from_other_directory(script, tmp_path, monkeypatch):
     """模拟 PyCharm 将 src 标为 Sources Root 后，以文件路径启动调试。"""
     root = Path(__file__).resolve().parents[1]

@@ -53,6 +53,10 @@ class Instrument:
     asset_id: int = 0
     size_decimals: int = 0
     price_deviation: Decimal = ZERO
+    dex: str = ""
+    collateral_token: int | None = None
+    max_leverage: int | None = None
+    margin_mode: str = ""
 
     @property
     def symbol(self) -> str:
