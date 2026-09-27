@@ -81,7 +81,11 @@ class FakeExchange(Exchange):
 def settings():
     """返回更宽的测试规模上限，避免测试盘口单价触及示例默认上限。"""
     return Settings(
-        max_notional=D("1000"), take_fraction=D("0.5"), funding_horizon_hours=D(0), spread_window_seconds=0
+        max_notional=D("1000"),
+        take_fraction=D("0.5"),
+        funding_horizon_hours=D(0),
+        spread_min_change_ratio=D(0),
+        spread_window_seconds=0,
     )
 
 

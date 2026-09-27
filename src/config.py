@@ -31,6 +31,7 @@ class Settings:
     spread_window_seconds: float = 3600.0
     spread_min_samples: int = 60
     spread_min_range_bps: Decimal = Decimal("5")
+    spread_min_change_ratio: Decimal = Decimal("0.10")
     spread_db_path: Path = Path("data/spreads.sqlite3")
     slippage_bps: Decimal = Decimal("5")
     exit_profit: Decimal = Decimal("0.1")
@@ -94,6 +95,7 @@ def load_settings(env_file: str | Path = ".env", *, mode: str | None = None) -> 
         "midline_bps",
         "funding_horizon_hours",
         "spread_min_range_bps",
+        "spread_min_change_ratio",
         "slippage_bps",
         "exit_profit",
         "stop_loss",

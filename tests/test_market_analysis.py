@@ -284,3 +284,54 @@ async def test_sqlite_history_survives_reopen_and_deduplicates(tmp_path, setting
         assert rows == [("hyperliquid:io", "10.123456789"), ("hyperliquid:xyz", "10.123456789")]
     finally:
         connection.close()
+
+
+@pytest.mark.parametrize(
+    "values,expected", [([95, 100, 95, 100], False), ([85, 95, 85, 95], True), ([-85, -95, -85, -95], True)]
+)
+def test_relative_change_filters_user_examples(values, expected):
+    """按 10% 相对门槛区分用户指定区间；负价差方向得到同样结果。"""
+    settings = Settings(
+        spread_min_samples=3,
+        spread_sample_seconds=1,
+        spread_window_seconds=60,
+        spread_min_range_bps=D(0),
+        spread_min_change_ratio=D("0.10"),
+    )
+    history = SpreadHistory(settings)
+    key = ("gate", "hyperliquid", "BTC")
+    for timestamp, value in zip((100, 101, 102, 103), values, strict=True):
+        record = history.observe(key, D(value), timestamp)
+    assert record["change_ratio"] >= 0
+    assert history.changing(key, D(values[-1]), 103) is expected
+
+
+def test_relative_change_zero_crossing_and_denominator_floor():
+    """正负价差不抵消分母，零附近不除零，常量价差变化率为零。"""
+    from market_analysis import spread_change_ratio
+
+    assert spread_change_ratio([D(85), D(95)]) == D(10) / D(90)
+    assert spread_change_ratio([D(-10), D(10)]) == 2
+    assert spread_change_ratio([D(0), D(0)]) == 0
+    assert spread_change_ratio([D("-0.01"), D("0.01")]) == D("0.02")
+
+
+async def test_change_ratio_saved_in_sqlite_payload(tmp_path, settings):
+    """新增比率随样本写入现有 payload，兼容已有 SQLite 表结构。"""
+    import json
+    import sqlite3
+
+    from spread_store import SpreadStore
+
+    settings = replace(
+        settings, spread_db_path=tmp_path / "ratio.sqlite3", spread_sample_seconds=1, spread_window_seconds=60
+    )
+    history = SpreadHistory(settings)
+    key = ("gate", "hyperliquid", "BTC")
+    history.observe(key, D(85), 100)
+    history.observe(key, D(95), 101)
+    row = history.observe(key, D(90), 102)
+    await SpreadStore(settings).save([{**row, "left": key[0], "right": key[1], "base": key[2]}])
+    with sqlite3.connect(settings.spread_db_path) as connection:
+        payload = json.loads(connection.execute("SELECT payload FROM spread_samples").fetchone()[0])
+    assert D(payload["change_ratio"]) == D(10) / D(90)

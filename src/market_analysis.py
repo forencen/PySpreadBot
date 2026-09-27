@@ -5,7 +5,7 @@ from math import floor, isfinite
 from statistics import mean
 from time import monotonic, time
 
-from models import BPS, ZERO
+from models import BPS, ZERO, D
 
 
 def funding_cost_per_unit(base, buy, sell, settings, now=None):
@@ -35,6 +35,15 @@ def funding_cost_per_unit(base, buy, sell, settings, now=None):
         count = max(0, floor((end - next_at) / interval) + 1) if next_at <= end else 0
         cost += sign * data.mark_price * data.rate * count
     return cost
+
+
+def spread_change_ratio(values):
+    """价差相对变化幅度 = 极差 / 平均绝对价差，返回比率而非百分数。
+
+    使用绝对值均值避免正负价差相互抵消；分母至少为 1 bps，防止接近零时
+    微小噪声被放大。它衡量窗口波动幅度，不代表单位时间速度或收敛概率。
+    """
+    return (max(values) - min(values)) / max(mean(abs(value) for value in values), D(1))
 
 
 class SpreadHistory:
@@ -72,6 +81,7 @@ class SpreadHistory:
                     "max_bps": max(values),
                     "samples": len(values),
                     "range_bps": max(values) - min(values),
+                    "change_ratio": spread_change_ratio(values),
                     "timestamp": now,
                 }
         if previous is None or previous[0] != bucket:
@@ -90,7 +100,7 @@ class SpreadHistory:
         return mean(values)
 
     def changing(self, key, current, now=None):
-        """只有近期有效样本与当前值的极差超过阈值才放行，不要求偏离均值。
+        """绝对极差和相对变化率都达标才放行，不要求偏离均值。
 
         当前值参与变化检查可及时识别新变化；样本数/新鲜度仍只依赖历史已完成桶。
         极差阈值用于排除小幅报价噪声，不能据此保证未来价差会收敛。
@@ -102,7 +112,10 @@ class SpreadHistory:
             value for stamp, value in self.rows[key] if stamp >= now - self.settings.spread_window_seconds
         ]
         values.append(current)
-        return max(values) - min(values) > self.settings.spread_min_range_bps
+        return (
+            max(values) - min(values) > self.settings.spread_min_range_bps
+            and spread_change_ratio(values) >= self.settings.spread_min_change_ratio
+        )
 
 
 def reverse_premium(premium):
