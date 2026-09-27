@@ -54,3 +54,24 @@ def create_exchange(name, settings, coordinator=None):
     except KeyError as error:
         raise ValueError(f"Unsupported exchange: {name}") from error
     return implementation(settings, coordinator)
+
+
+async def select_hyperliquid_routes(settings):
+    """启动前按优先级固定每个基础币的市场，所有子进程共享同一份选择。
+
+    原生市场优先保留；HIP-3 按 HL_DEXS 顺序选择有效合约。元数据获取失败直接
+    阻止启动，不能把网络故障当成标的不存在。运行期间不切换已有仓位的 DEX。
+    """
+    names = [name for name in settings.exchanges if name.split(":", 1)[0] == "hyperliquid"]
+    priority = ["hyperliquid", *(f"hyperliquid:{dex}" for dex in settings.hl_dexs)]
+    names.sort(key=lambda name: priority.index(name) if name in priority else len(priority))
+    routes = {}
+    for name in names:
+        venue = create_exchange(name, settings)
+        try:
+            await venue.initialize()
+            for base in venue.instruments:
+                routes.setdefault(base, name)
+        finally:
+            await venue.close()
+    return replace(settings, hl_routes=routes)

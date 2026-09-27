@@ -42,7 +42,8 @@ class Settings:
     usdc_usd: Decimal = Decimal("1")
     gate_fee: Decimal = Decimal("0.0005")
     hl_fee: Decimal = Decimal("0.00045")
-    hl_dexs: tuple[str, ...] = ("xyz",)
+    hl_dexs: tuple[str, ...] = ("xyz", "para", "io", "mkts")
+    hl_routes: dict | None = field(default=None, repr=False)
     hl_hip3_fee: Decimal = Decimal("0.001")
     hl_dex_fees: dict = field(default_factory=dict)
     quote_usd_rates: dict = field(default_factory=dict)
@@ -96,6 +97,8 @@ def load_settings(env_file: str | Path = ".env", *, mode: str | None = None) -> 
     float_fields = {"max_age", "request_timeout", "signal_seconds", "reconcile_seconds", "metadata_seconds"}
     int_fields = {"max_positions", "max_depth_subscriptions", "orders_per_minute"}
     for name in Settings.__dataclass_fields__:
+        if name == "hl_routes":
+            continue  # 仅启动器生成，不能由环境变量注入路由。
         raw = os.getenv(name.upper())
         if raw is None:
             continue

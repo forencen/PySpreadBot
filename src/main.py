@@ -11,7 +11,13 @@ from dataclasses import replace
 from config import load_settings
 from coordination import Coordinator
 from engine import PairWorker
-from exchange import create_exchange, exchange_pairs, resolve_exchanges, supports_exchange
+from exchange import (
+    create_exchange,
+    exchange_pairs,
+    resolve_exchanges,
+    select_hyperliquid_routes,
+    supports_exchange,
+)
 
 
 def worker_entry(settings, names):
@@ -106,7 +112,7 @@ def main():
     parser.add_argument("command", choices=["run", "cache", "probe", "status"], nargs="?", default="run")
     parser.add_argument("--env", default=".env", help="Configuration file path")
     parser.add_argument("--exchange", help="Single market for cache/probe, e.g. hyperliquid:xyz")
-    parser.add_argument("--symbol", help="Normalized base symbol for probe, e.g. XYZ:TSLA or mapped TSLA")
+    parser.add_argument("--symbol", help="Normalized base symbol for probe, e.g. TSLA")
     args = parser.parse_args()
     settings = load_settings(args.env, mode="observe" if args.command in {"cache", "probe"} else None)
     if args.exchange:
@@ -121,6 +127,7 @@ def main():
         if args.command != "status":
             settings = asyncio.run(resolve_exchanges(settings))
         if args.command == "run":
+            settings = asyncio.run(select_hyperliquid_routes(settings))
             run_processes(settings)
         else:
             asyncio.run(command(settings, args.command, args.symbol))

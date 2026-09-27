@@ -24,6 +24,9 @@ def normalize(exchange: str, native: str, quote: str, aliases: dict) -> tuple[st
         if not multiplier.is_finite() or multiplier <= 0:
             raise ValueError(f"Invalid multiplier for {key}")
         return str(base).upper(), multiplier
+    if exchange == "hyperliquid" and ":" in native:
+        # 下单身份仍保留完整 native；仅匹配名去掉部署方前缀，复用千倍币规则。
+        return normalize(exchange, native.split(":", 1)[1], quote, aliases)
     compact = re.sub(r"[\s_\-/—–]+", "", native).upper()
     if exchange != "hyperliquid" and compact.endswith(quote):
         compact = compact[: -len(quote)]

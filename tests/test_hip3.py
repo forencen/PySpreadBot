@@ -34,12 +34,12 @@ def metadata_venue(settings, quote="USDC"):
 
 
 async def test_metadata_namespace_asset_ids_and_collateral(settings):
-    """编号保留所有原始槽位，未映射标的不自动与 Gate BTC 配对。"""
+    """编号保留所有原始槽位，匹配名去除 DEX 前缀但原生身份完整。"""
     venue = metadata_venue(settings)
     items, raw = await venue.fetch_instruments()
     assert not items[0].active
     btc = items[1]
-    assert (btc.base, btc.native, btc.asset_id) == ("XYZ:BTC", "xyz:BTC", 120001)
+    assert (btc.base, btc.native, btc.asset_id) == ("BTC", "xyz:BTC", 120001)
     assert (btc.quote, btc.collateral_token, btc.max_leverage, btc.margin_mode) == ("USDC", 42, 20, "noCross")
     assert raw["dex_index"] == 2
     assert venue._http_info.call_args_list[0].args[0] == {"type": "meta", "dex": "xyz"}
@@ -241,3 +241,65 @@ def test_hip3_configuration_loading(tmp_path, monkeypatch):
     monkeypatch.setenv("QUOTE_USD_RATES", '{"USDH":"0"}')
     with pytest.raises(ValueError, match="QUOTE_USD_RATES"):
         load_settings(tmp_path / "missing.env")
+
+
+async def test_priority_routes_fallback_and_close(settings, monkeypatch):
+    """同名选择 xyz，缺失逐级替补；每个探测实例都关闭，配置顺序胜过进程顺序。"""
+    import exchange
+
+    available = {
+        "hyperliquid:mkts": ["HOOD", "D"],
+        "hyperliquid:io": ["HOOD", "C"],
+        "hyperliquid:para": ["HOOD", "B"],
+        "hyperliquid:xyz": ["HOOD"],
+    }
+    instances = []
+
+    def factory(name, settings):
+        """提供仅含有效规则的市场实例。"""
+        venue = Mock(initialize=AsyncMock(), close=AsyncMock(), instruments=dict.fromkeys(available[name]))
+        instances.append(venue)
+        return venue
+
+    monkeypatch.setattr(exchange, "create_exchange", factory)
+    result = await exchange.select_hyperliquid_routes(replace(settings, exchanges=tuple(available)))
+    assert result.hl_routes == {
+        "HOOD": "hyperliquid:xyz",
+        "B": "hyperliquid:para",
+        "C": "hyperliquid:io",
+        "D": "hyperliquid:mkts",
+    }
+    for venue in instances:
+        venue.close.assert_awaited_once()
+
+
+async def test_priority_failure_does_not_silently_fallback(settings, monkeypatch):
+    """高优先级元数据请求失败不能被误判为缺少标的。"""
+    import exchange
+
+    venue = Mock(initialize=AsyncMock(side_effect=RuntimeError("offline")), close=AsyncMock())
+    monkeypatch.setattr(exchange, "create_exchange", Mock(return_value=venue))
+    with pytest.raises(RuntimeError, match="offline"):
+        await exchange.select_hyperliquid_routes(replace(settings, exchanges=("hyperliquid:xyz",)))
+    venue.close.assert_awaited_once()
+
+
+async def test_unselected_market_rejects_entry_but_allows_reduction(settings):
+    """刷新或调用路径不能绕过优先级；减仓保留原市场身份。"""
+    venue = await ready_venue(replace(settings, hl_routes={"BTC": "hyperliquid:para"}))
+    order = Order(venue.name, "BTC", Side.SELL, D(1), D(103))
+    with pytest.raises(ValidationError, match="assigned"):
+        venue.validate_order(order)
+    venue.validate_order(replace(order, reduce_only=True))
+
+
+def test_hip3_ticker_normalization():
+    """HOOD 自动匹配，千倍币复用映射，完整名称的显式别名优先。"""
+    from normalization import normalize
+
+    assert normalize("hyperliquid", "xyz:HOOD", "USDC", {}) == ("HOOD", D(1))
+    assert normalize("hyperliquid", "io:kPEPE", "USDC", {}) == ("PEPE", D(1000))
+    assert normalize("hyperliquid", "xyz:HOOD", "USDC", {"hyperliquid:xyz:HOOD": ["OTHER", "2"]}) == (
+        "OTHER",
+        D(2),
+    )

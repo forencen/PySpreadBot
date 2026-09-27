@@ -41,6 +41,12 @@ class PairWorker:
                 await venue.initialize()
             left, right = self.exchanges.values()
             common = set(left.instruments) & set(right.instruments)
+            if self.settings.hl_routes is not None:
+                for name in self.names:
+                    if name.split(":", 1)[0] == "hyperliquid":
+                        common &= {
+                            base for base, selected in self.settings.hl_routes.items() if selected == name
+                        }
             if self.settings.symbols != ("*",):
                 common &= set(self.settings.symbols)
             if not common:

@@ -77,21 +77,25 @@ ALIASES={"gate:1000PEPE_USDT":["PEPE","1000"]}
 
 ## Hyperliquid HIP-3
 
-每个部署方市场使用独立标识，如 `hyperliquid:xyz`、`hyperliquid:io`。默认启用 `xyz`；其他部署方可加入 `HL_DEXS`，或用 `*` 在启动时发现全部市场。空值表示只启用原生永续。也可用 `EXCHANGES=gate,hyperliquid:xyz` 仅运行指定组合。
+每个部署方市场使用独立标识，如 `hyperliquid:xyz`、`hyperliquid:io`。默认按 `xyz,para,io,mkts` 顺序启用；其他部署方可加入 `HL_DEXS`，或用 `*` 在启动时发现全部市场。空值表示只启用原生永续。也可用 `EXCHANGES=gate,hyperliquid:xyz` 仅运行指定组合。
 
 ```dotenv
 EXCHANGES=gate,hyperliquid
-HL_DEXS=xyz,io
+HL_DEXS=xyz,para,io,mkts
 # 同时关注原生币和已确认可配对的 HIP-3 标的
 SYMBOLS=BTC,ETH,TSLA
 HL_HIP3_FEE=0.001
 HL_DEX_FEES={}
 QUOTE_USD_RATES={}
-# 确认资产、指数及单位等价后，把所需映射合并进已有 ALIASES
-ALIASES={"hyperliquid:xyz:TSLA":["TSLA","1"]}
+# 普通同名 ticker 自动匹配；特殊单位/资产仍可显式覆盖
+ALIASES={}
 ```
 
-以上会创建 Gate/原生、Gate/xyz、Gate/io 三个组合；不创建 Hyperliquid 内部市场间套利组合。没有共同配置标的的组合正常跳过，其他组合继续运行。默认 HIP-3 名称保留命名空间，例如 `XYZ:TSLA`；未配置别名时不会自动与 Gate 的 `TSLA` 配对。股票、商品等也需要对端存在且确认经济含义相同，才能配置配对。
+以上创建 Gate 与各 Hyperliquid 市场的组合，不创建 Hyperliquid 内部市场间组合。`xyz:HOOD`、`para:HOOD` 的匹配名均为 `HOOD`，可与 Gate 的 `HOOD_USDT` 对比；下单仍使用完整原生名称和对应 asset ID。
+
+启动时获取所有启用市场的有效合约，按 `xyz → para → io → mkts` 为每个 ticker 选择首个可用 DEX。例如四个 DEX 都有 HOOD，只让 xyz 的 HOOD 参与；xyz 没有则选 para，依次替补。原生永续如有同名标的则保留原生优先。下架或缺少抵押币折算率的合约不参与选择；请求失败会阻止启动，不把网络错误当作标的缺失。路由传给所有子进程，不由锁竞争决定市场。运行中不因断线、价差或下架自动换 DEX，重启时重新选择，已有仓位沿用原归属处理。
+
+`SYMBOLS` 仍决定监控范围：要比较 HOOD，加入 `SYMBOLS=BTC,ETH,HOOD` 或使用 `SYMBOLS=*`。特殊单位或不应合并的同名资产可通过完整名称的 `ALIASES` 覆盖。无共同标的的组合正常跳过。
 
 合约发现读取 `perpDexs`、指定 DEX 的 `meta` 和 `spotMeta`，保存真实抵押币、保证金模式、最大杠杆及下单资产编号。编号使用 `100000 + DEX 原始索引 × 10000 + 合约原始索引`，保留空槽和下架合约的位置。缓存分别写入 `hyperliquid.json`、`hyperliquid__xyz.json` 等文件。
 
@@ -103,8 +107,7 @@ USDT/USDC 沿用现有汇率配置，其他抵押币或手续费币种通过 `QU
 
 ```sh
 python src/main.py cache --exchange hyperliquid:xyz
-# 未配置 TSLA 别名时使用 XYZ:TSLA；已映射时使用 TSLA
-python src/main.py probe --exchange hyperliquid:xyz --symbol XYZ:TSLA
+python src/main.py probe --exchange hyperliquid:xyz --symbol TSLA
 ```
 
 协议依据：[资产编号](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/asset-ids)、[永续元数据](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/perpetuals)、[WSS 订阅](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/websocket/subscriptions)。

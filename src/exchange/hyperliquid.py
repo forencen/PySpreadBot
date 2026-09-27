@@ -82,7 +82,7 @@ class HyperliquidExchange(Exchange):
         """发现指定 DEX 的全部合约，读取真实抵押币并生成全球唯一的下单 asset ID。
 
         HIP-3 用 100000 + dex 索引 * 10000 + universe 原始索引；下架合约不能
-        在编号前被过滤。同名标的默认保留 DEX 前缀，只有 ALIASES 显式配置才跨所配对。
+        在编号前被过滤。匹配名去掉 DEX 前缀，原生名称和下单身份保持完整。
         """
         raw = await self._http_info(self._dex_payload("meta"))
         quote, collateral = "USDC", None
@@ -161,6 +161,9 @@ class HyperliquidExchange(Exchange):
     def validate_order(self, order):
         """复用统一校验；HIP-3 实盘必须显式配置该 DEX 的费率，不能套用原生费用。"""
         super().validate_order(order)
+        routes = self.settings.hl_routes
+        if not order.reduce_only and routes is not None and routes.get(order.base) != self.name:
+            raise ValidationError("Ticker assigned to another Hyperliquid market")
         if self.dex and self.settings.mode == "live" and self.dex not in self.settings.hl_dex_fees:
             raise ValidationError(f"Configure HL_DEX_FEES for {self.dex} before live trading")
 
