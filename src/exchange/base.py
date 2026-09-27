@@ -33,6 +33,7 @@ class Exchange(ABC):
         self.instruments: dict[str, Instrument] = {}
         self.by_native: dict[str, Instrument] = {}
         self.quotes: dict[str, Quote] = {}
+        self.funding = {}
         self.books: dict[str, Book] = {}
         self.depth: set[str] = set()
         self.symbols: set[str] = set()
@@ -104,6 +105,7 @@ class Exchange(ABC):
 
     def invalidate(self) -> None:
         """断线立即使全部本地行情失效，阻止使用重连前的残留盘口。"""
+        self.funding.clear()
         self.books.clear()
         self.quotes.clear()
         self.changed.set()

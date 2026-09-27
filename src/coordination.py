@@ -101,9 +101,21 @@ class Coordinator:
             pipe.publish(self.key("events"), encoded)
             await pipe.execute()
 
+    async def save_spread(self, left, right, base, payload, maximum):
+        """保存每个时间桶的价差统计和有界历史；使用完整 DEX 身份避免不同组合覆盖。"""
+        identity = f"{left}|{right}|{base}"
+        payload = {"left": left, "right": right, "base": base, **payload}
+        encoded = json.dumps(payload, default=str)
+        async with self.redis.pipeline(transaction=True) as pipe:
+            pipe.hset(self.key("spreads"), identity, encoded)
+            pipe.lpush(self.key(f"spread_history:{identity}"), encoded)
+            pipe.ltrim(self.key(f"spread_history:{identity}"), 0, maximum - 1)
+            await pipe.execute()
+
     async def snapshot(self) -> dict:
         """获取归属、持仓和最新 PnL，供 status CLI 读取而不连接交易所。"""
         return {
+            "spreads": {k: json.loads(v) for k, v in (await self.redis.hgetall(self.key("spreads"))).items()},
             "owners": await self.redis.hgetall(self.key("owners")),
             "positions": {
                 k: json.loads(v) for k, v in (await self.redis.hgetall(self.key("positions"))).items()

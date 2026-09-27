@@ -6,7 +6,7 @@ from time import monotonic, time
 from uuid import uuid4
 
 from exchange.base import Exchange, ValidationError
-from models import Book, D, Fill, Instrument, Level, Order, OrderStatus, Quote
+from models import Book, D, Fill, Funding, Instrument, Level, Order, OrderStatus, Quote
 from normalization import normalize
 from transport import WebSocketTransport
 
@@ -51,6 +51,8 @@ class GateExchange(Exchange):
                     taker_fee=self.settings.gate_fee,
                     active=not item.get("in_delisting", False) and item.get("status", "trading") == "trading",
                     price_deviation=D(item.get("order_price_deviate", "0")),
+                    funding_interval=int(item.get("funding_interval", 0)),
+                    funding_next_apply=float(item.get("funding_next_apply", 0)),
                 )
             )
         return instruments, raw
@@ -153,6 +155,15 @@ class GateExchange(Exchange):
                 instrument = self.by_native.get(item["contract"])
                 if instrument and item.get("mark_price"):
                     self.marks[instrument.base] = (D(item["mark_price"]), monotonic())
+                    if item.get("funding_rate") is not None:
+                        self.funding[instrument.base] = Funding(
+                            D(str(item["funding_rate"])),
+                            instrument.price(D(item["mark_price"]), self.settings.fx(instrument.quote)),
+                            instrument.funding_interval,
+                            instrument.funding_next_apply,
+                            exchange_time=float(item.get("t", message.get("time_ms", time() * 1000))) / 1000,
+                        )
+                        self.changed.set()
         elif channel == "futures.book_ticker" and message.get("event") == "update":
             instrument = self.by_native.get(result["s"])
             if instrument and result.get("b") and result.get("a"):

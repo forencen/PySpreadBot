@@ -47,7 +47,7 @@ PyCharm 的 Parameters 可填写上述选项。该入口强制 `observe`，即�
 1. 读取合约元数据：最小/最大数量、数量步长、合约乘数、价格精度、下架状态、价格偏离限制等。
 2. WSS 维护轻量行情：Gate 买卖一及标记价、Hyperliquid 全市场中间价。
 3. 初筛出现价格差后，通过 WSS 订阅该标的深度。Gate 使用 `futures.obu` 50 档，Hyperliquid 使用 `l2Book`。长期不满足初筛的空仓标的自动退订深度。
-4. 两边逐档匹配可成交数量，检查共同数量步长、手续费、往返滑点预算、规模上限、信号持续时间和行情新鲜度。
+4. 按固定时间采样建立交易对的历史价差中枢；偏离中枢后逐档计算可成交数量，扣除手续费、滑点和预计持仓期资金费，再检查规模及信号持续时间。
 5. Redis 原子获取基础币归属；确认账户没有遗留仓位，两边基础校验均通过，发送前再次核对可成交价差。
 6. 先写订单 intent，再通过两边 WSS 并发发送 IOC 限价单；查明最终成交。多成交的一边以 `reduce-only` 削减差额。
 7. 对账并维护持仓，持续计算当前双边反向深度可实现的预计 PnL，触发止盈/止损时平仓。确认双方实际仓位均为零后释放归属。
@@ -130,7 +130,7 @@ WSS_PROXY=http://127.0.0.1:7890
 | `MAX_NOTIONAL` | 每腿最大名义金额，USD 估值 |
 | `MAX_POSITIONS` | 全进程最大占用标的数量，包括冻结标的 |
 | `ENTRY_BPS` | 扣除预算费用后的入场带宽 |
-| `MIDLINE_BPS` | 按配置中的交易所先后顺序，第一所相对第二所的长期溢价中枢 |
+| `MIDLINE_BPS` | 历史中枢的手动附加偏移；关闭历史统计时作为固定中枢 |
 | `SLIPPAGE_BPS` | IOC 价格保护和计算时的滑点预算 |
 | `TAKE_FRACTION` | 可用深度参与比例 |
 | `EXIT_PROFIT` / `STOP_LOSS` | 预计净平仓 PnL 的止盈值/亏损绝对值，USD |
@@ -146,7 +146,33 @@ WSS_PROXY=http://127.0.0.1:7890
 
 参考 [entropy-arb 的信号与执行说明](https://github.com/your-quantguy/entropy-arb/blob/main/README.zh-CN.md)，采用净价差、可配置溢价中枢、IOC 双腿执行和不平衡减仓，未复制其源码。
 
-入场使用实际深度累计的买入金额与卖出金额，扣除两边预估往返 taker 手续费及滑点预算。中枢只是测量参数；默认零不代表真实市场没有长期基差，策略不保证价差收敛。
+入场使用实际深度累计金额，扣除预估往返 taker 手续费、滑点、持仓期资金费和历史价差中枢。两个新增过滤默认开启：
+
+```dotenv
+FUNDING_HORIZON_HOURS=8
+FUNDING_MAX_AGE=60
+FUNDING_SCHEDULE_MAX_AGE=120
+SPREAD_SAMPLE_SECONDS=10
+SPREAD_WINDOW_SECONDS=3600
+SPREAD_MIN_SAMPLES=60
+```
+
+**资金费预算**：以预计持仓 `FUNDING_HORIZON_HOURS` 小时为窗口，根据每所下一结算时间和间隔分别计算结算次数，窗口末端的结算也计入。每单位基础币的净资金费成本为：
+
+```text
+多头标记价 × 多头单次费率 × 多头结算次数
+− 空头标记价 × 空头单次费率 × 空头结算次数
+```
+
+价格先折算为 USD/基础币。正结果是支出，负结果是收入；预估费率和标记价假定在持仓期内不变。Gate 的 WSS `futures.tickers` 提供当前费率，合约元数据提供结算周期/下一时间，并以最多 `FUNDING_SCHEDULE_MAX_AGE / 2` 秒间隔刷新。Hyperliquid 原生及 HIP-3 在订阅深度时同时订阅 `activeAssetCtx`，按小时结算。资金费数据缺失或过期、结算周期未知时不新开仓，不能默认为零；下单前重新计算。`FUNDING_HORIZON_HOURS=0` 显式关闭此过滤。
+
+**历史价差过滤**：每个有序交易所组合、每个基础币独立统计 `（左所中间价 / 右所中间价 − 1）× 10000`。默认每 10 秒取一份新鲜样本，在最近 1 小时窗口内计算均值；至少积累 60 份已完成时段样本（约 10 分钟）才允许入场。同一时间桶的密集行情不会增加权重，当前桶不计入自身入场基准，断线期间不补样本。
+
+例如某交易对长期价差为 100 bps，当前仍是 100 bps，即使超过 `ENTRY_BPS=20` 也不入场。只有偏离历史基准，并扣除往返手续费、滑点和资金费后仍达到 `ENTRY_BPS` 才形成机会。即使预计能收资金费，也不能绕过价格偏离门槛。反向交易对历史溢价做比例倒数转换，不直接取负。
+
+`MIDLINE_BPS` 默认零，现在作为历史均值的附加偏移。`SPREAD_WINDOW_SECONDS=0` 可退回固定中枢。重启后重新预热，不将 Redis 中旧统计直接用于交易。历史均值仅用于过滤固定价差，并不保证价差未来收敛。
+
+运行 `python src/main.py status` 可查看 `spreads`：每个组合/交易对最新时段价差、窗口均值、最大值、最小值和样本数。Redis 的 `spread_history:<左所>|<右所>|<基础币>` 列表保存有界的逐时段统计，完整 DEX 身份防止数据相互覆盖。
 
 ```text
 预计平仓 PnL
@@ -156,7 +182,7 @@ WSS_PROXY=http://127.0.0.1:7890
 − 预估平仓手续费
 ```
 
-盘口不足、行情过期或交叉盘口时不输出可执行 PnL。Redis `pnl` 数据明确标记 `estimate=true`、`funding_included=false`。本版成交费用主要使用配置费率估计，**未计入资金费、强平费及实际汇兑损益**；因此是交易价差的净平仓估值，不是交易所最终账户账单。paper 也不模拟资金费、排队、网络竞争或自身交易对后续公共盘口的冲击。
+盘口不足、行情过期或交叉盘口时不输出可执行 PnL。Redis `pnl` 数据明确标记 `estimate=true`、`funding_included=false`。本版成交费用主要使用配置费率估计，**尚未计入已结算资金费、强平费及实际汇兑损益**；入场资金费预算不会冒充已结算资金费写入现金流，因此是交易价差的净平仓估值，不是交易所最终账户账单。paper 也不模拟资金费、排队、网络竞争或自身交易对后续公共盘口的冲击。
 
 ## 多进程、崩溃与恢复
 
@@ -187,6 +213,7 @@ PySpreadBot/
 │   ├── cache.py             # 合约规则原子缓存
 │   ├── transport.py         # WSS 重连、响应关联、推送分发
 │   ├── coordination.py      # Redis 归属、日志、nonce、订单预算
+│   ├── market_analysis.py   # 资金费预算、固定时间采样历史价差
 │   ├── strategy.py          # 深度价差、共同步长、平仓 PnL
 │   ├── execution.py         # 双腿状态机、补偿、对账
 │   ├── engine.py            # 组合运行循环和持仓维护
@@ -207,3 +234,5 @@ PySpreadBot/
 ├── build/                   # 临时构建目录，不提交
 └── dist/                    # wheel 和源码包，不提交
 ```
+
+资金费协议依据：[Gate WSS ticker](https://www.gate.com/docs/developers/futures/ws/en/)、[Gate 合约日程](https://www.gate.com/docs/developers/apiv4/en/futures/)、[Hyperliquid WSS 上下文](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/websocket/subscriptions)、[Hyperliquid 小时结算](https://hyperliquid.gitbook.io/hyperliquid-docs/trading/funding)。

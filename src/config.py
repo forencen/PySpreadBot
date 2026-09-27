@@ -24,6 +24,12 @@ class Settings:
     max_notional: Decimal = Decimal("50")
     entry_bps: Decimal = Decimal("20")
     midline_bps: Decimal = Decimal("0")
+    funding_horizon_hours: Decimal = Decimal("8")
+    funding_max_age: float = 60.0
+    funding_schedule_max_age: float = 120.0
+    spread_sample_seconds: float = 10.0
+    spread_window_seconds: float = 3600.0
+    spread_min_samples: int = 60
     slippage_bps: Decimal = Decimal("5")
     exit_profit: Decimal = Decimal("0.1")
     stop_loss: Decimal = Decimal("2")
@@ -84,6 +90,7 @@ def load_settings(env_file: str | Path = ".env", *, mode: str | None = None) -> 
         "max_notional",
         "entry_bps",
         "midline_bps",
+        "funding_horizon_hours",
         "slippage_bps",
         "exit_profit",
         "stop_loss",
@@ -95,7 +102,13 @@ def load_settings(env_file: str | Path = ".env", *, mode: str | None = None) -> 
         "hl_hip3_fee",
     }
     float_fields = {"max_age", "request_timeout", "signal_seconds", "reconcile_seconds", "metadata_seconds"}
-    int_fields = {"max_positions", "max_depth_subscriptions", "orders_per_minute"}
+    float_fields |= {
+        "funding_max_age",
+        "funding_schedule_max_age",
+        "spread_sample_seconds",
+        "spread_window_seconds",
+    }
+    int_fields = {"spread_min_samples", "max_positions", "max_depth_subscriptions", "orders_per_minute"}
     for name in Settings.__dataclass_fields__:
         if name == "hl_routes":
             continue  # 仅启动器生成，不能由环境变量注入路由。
@@ -145,7 +158,14 @@ def load_settings(env_file: str | Path = ".env", *, mode: str | None = None) -> 
         "*" in settings.hl_dexs and settings.hl_dexs != ("*",)
     ):
         raise ValueError("HL_DEXS must contain distinct dex names or a single *")
-    for name in float_fields | int_fields:
+    if settings.spread_window_seconds < 0 or not settings.spread_window_seconds < float("inf"):
+        raise ValueError("SPREAD_WINDOW_SECONDS must be finite and nonnegative")
+    if settings.spread_window_seconds and (
+        settings.spread_min_samples < 2
+        or settings.spread_window_seconds < settings.spread_sample_seconds * settings.spread_min_samples
+    ):
+        raise ValueError("Spread window must fit at least SPREAD_MIN_SAMPLES >= 2 samples")
+    for name in (float_fields | int_fields) - {"spread_window_seconds"}:
         value = getattr(settings, name)
         if not 0 < value < float("inf"):
             raise ValueError(f"{name} must be finite and positive")

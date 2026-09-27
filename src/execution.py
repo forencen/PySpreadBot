@@ -5,6 +5,7 @@ import logging
 from time import monotonic
 
 from exchange.base import ValidationError
+from market_analysis import funding_cost_per_unit, reverse_premium
 from models import BPS, Fill, Order, OrderStatus, Position, Side
 
 log = logging.getLogger(__name__)
@@ -13,12 +14,13 @@ log = logging.getLogger(__name__)
 class ExecutionEngine:
     """每个组合进程只运行一个执行器；每个基础币持仓由全局 Redis owner 唯一拥有。"""
 
-    def __init__(self, settings, exchanges, coordinator, owner):
+    def __init__(self, settings, exchanges, coordinator, owner, strategy=None):
         """保存交易所注册表及协调器，本地只追踪当前进程创建的持仓。"""
         self.settings, self.exchanges = settings, exchanges
         self.coordinator, self.owner = coordinator, owner
         self.positions: dict[str, Position] = {}
         self.last_reconcile: dict[str, float] = {}
+        self.strategy = strategy
 
     async def open(self, opportunity) -> Position | None:
         """获取全局所有权后检查原有账户仓位；两条腿都校验通过才记录 intent 并发送。"""
@@ -79,13 +81,26 @@ class ExecutionEngine:
                 raise ValidationError("Market moved outside order price protection")
             values.append(value)
             fees += venue.instruments[order.base].taker_fee
-        baseline = (
-            self.settings.midline_bps
-            if sell.exchange == self.settings.exchanges[0]
-            else -self.settings.midline_bps
+        if self.settings.spread_window_seconds:
+            if self.strategy is None:
+                raise ValidationError("Spread history unavailable before submission")
+            left, right = (self.exchanges[name] for name in self.settings.exchanges)
+            center = self.strategy.baseline(buy.base, left, right)
+        else:
+            center = self.settings.midline_bps
+        if center is None or center <= -BPS:
+            raise ValidationError("Spread history not ready before submission")
+        baseline = center if sell.exchange == self.settings.exchanges[0] else reverse_premium(center)
+        funding = funding_cost_per_unit(
+            buy.base, self.exchanges[buy.exchange], self.exchanges[sell.exchange], self.settings
         )
-        net = (values[1] / values[0] - 1) * BPS - fees * BPS * 2 - self.settings.slippage_bps * 2
-        if net < self.settings.entry_bps + baseline:
+        if funding is None:
+            raise ValidationError("Funding unavailable before submission")
+        gross = (values[1] / values[0] - 1) * BPS
+        net = (
+            gross - funding * buy.quantity / values[0] * BPS - fees * BPS * 2 - self.settings.slippage_bps * 2
+        )
+        if gross - baseline < self.settings.entry_bps or net - baseline < self.settings.entry_bps:
             raise ValidationError("Net edge disappeared before submission")
 
     async def _execute(self, position, orders) -> None:

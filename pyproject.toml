@@ -26,7 +26,7 @@ packages = ["exchange"]
 package-dir = {"" = "src"}
 py-modules = [
     "main", "pyspreadbot", "debug_gate", "config", "models", "normalization",
-    "cache", "transport", "coordination", "strategy", "execution", "engine",
+    "cache", "transport", "coordination", "strategy", "execution", "engine", "market_analysis",
 ]
 
 [tool.pytest.ini_options]

@@ -28,7 +28,9 @@ class PairWorker:
         self.coordinator = Coordinator(settings.redis_url, settings.namespace, settings.mode)
         self.exchanges = {name: create_exchange(name, settings, self.coordinator) for name in names}
         self.strategy = ArbitrageStrategy(settings)
-        self.execution = ExecutionEngine(settings, self.exchanges, self.coordinator, self.owner)
+        self.execution = ExecutionEngine(
+            settings, self.exchanges, self.coordinator, self.owner, self.strategy
+        )
         self.armed = {}
         self.depth_seen = {}
         self.last_maintenance = 0.0
@@ -64,6 +66,16 @@ class PairWorker:
                 for base in sorted(common):
                     if base not in left.instruments or base not in right.instruments:
                         continue
+                    stats = self.strategy.observe(base, left, right)
+                    if stats is not None:
+                        await self.coordinator.save_spread(
+                            left.name,
+                            right.name,
+                            base,
+                            stats,
+                            int(self.settings.spread_window_seconds / self.settings.spread_sample_seconds)
+                            + 1,
+                        )
                     if base in self.execution.positions:
                         continue
                     candidate = self.strategy.candidate(base, left, right)
@@ -89,7 +101,13 @@ class PairWorker:
                     if monotonic() - previous[1] < self.settings.signal_seconds:
                         continue
                     if self.settings.mode == "observe":
-                        log.info("%s opportunity net=%s bps", base, opportunity.net_edge_bps)
+                        log.info(
+                            "%s opportunity net=%s bps baseline=%s bps funding_cost=%s USD",
+                            base,
+                            opportunity.net_edge_bps,
+                            opportunity.baseline_bps,
+                            opportunity.funding_cost_usd,
+                        )
                         self.armed[base] = (direction, monotonic())
                     else:
                         await self.execution.open(opportunity)
@@ -126,7 +144,10 @@ class PairWorker:
         await self.coordinator.heartbeat(self.owner)
         self.last_maintenance = now
         for venue in self.exchanges.values():
-            if now - venue.metadata_at >= self.settings.metadata_seconds:
+            refresh_seconds = self.settings.metadata_seconds
+            if venue.name == "gate" and self.settings.funding_horizon_hours:
+                refresh_seconds = min(refresh_seconds, self.settings.funding_schedule_max_age / 2)
+            if now - venue.metadata_at >= refresh_seconds:
                 await venue.refresh_instruments()
 
     async def _manage_positions(self) -> None:

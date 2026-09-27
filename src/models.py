@@ -57,6 +57,8 @@ class Instrument:
     collateral_token: int | None = None
     max_leverage: int | None = None
     margin_mode: str = ""
+    funding_interval: int = 0
+    funding_next_apply: float = 0
 
     @property
     def symbol(self) -> str:
@@ -92,6 +94,28 @@ class Level:
 
     price: Decimal
     quantity: Decimal
+
+
+@dataclass(frozen=True)
+class Funding:
+    """单次结算费率、USD/基础币标记价和结算日程；正费率代表多头支付。"""
+
+    rate: Decimal
+    mark_price: Decimal
+    interval_seconds: int
+    next_settlement: float
+    received: float = field(default_factory=monotonic)
+    exchange_time: float = field(default_factory=time)
+
+    def fresh(self, max_age: float) -> bool:
+        """拒绝非有限费率/价格及迟到快照，零费率仍是有效数据。"""
+        return (
+            self.rate.is_finite()
+            and self.mark_price.is_finite()
+            and self.mark_price > 0
+            and 0 <= monotonic() - self.received <= max_age
+            and -1 <= time() - self.exchange_time <= max_age
+        )
 
 
 @dataclass(frozen=True)

@@ -101,7 +101,11 @@ async def test_wss_routing_and_namespace_isolation(settings):
     venue = await ready_venue(settings)
     await venue._connected()
     subscriptions = [call.args[0]["subscription"] for call in venue.transport.send.call_args_list]
-    assert subscriptions == [{"type": "allMids", "dex": "xyz"}, {"type": "l2Book", "coin": "xyz:BTC"}]
+    assert subscriptions == [
+        {"type": "allMids", "dex": "xyz"},
+        {"type": "activeAssetCtx", "coin": "xyz:BTC"},
+        {"type": "l2Book", "coin": "xyz:BTC"},
+    ]
     await venue.handle_message({"channel": "allMids", "data": {"mids": {"BTC": "1", "io:BTC": "2"}}})
     assert not venue.quotes
     await venue.handle_message({"channel": "allMids", "data": {"mids": {"xyz:BTC": "103"}}})

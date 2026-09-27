@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from math import lcm
 from time import monotonic, time
 
+from market_analysis import SpreadHistory, funding_cost_per_unit, reverse_premium
 from models import BPS, ZERO, D, Order, Position, Side, floor_step
 
 
@@ -14,6 +15,8 @@ class Opportunity:
     buy: Order
     sell: Order
     net_edge_bps: D
+    funding_cost_usd: D = ZERO
+    baseline_bps: D = ZERO
 
 
 def common_step(left: D, right: D) -> D:
@@ -26,11 +29,12 @@ class ArbitrageStrategy:
     """按可成交净价差选择方向，非零中枢按交易所组合固定顺序解释。"""
 
     def __init__(self, settings):
-        """保存阈值；中枢不自动估计，用户应基于采集数据设置。"""
+        """保存门槛和等时间采样的价差历史；手动中枢作为历史中枢的附加偏移。"""
         self.settings = settings
+        self.history = SpreadHistory(settings)
 
-    def candidate(self, base, left, right) -> bool:
-        """轻量报价只触发深度订阅；中间价筛选结果永远不能直接触发下单。"""
+    def premium(self, base, left, right):
+        """新鲜双边中间价生成固定方向溢价，报价无效时不采样、不触发候选。"""
         quotes = (left.quotes.get(base), right.quotes.get(base))
         if any(
             q is None
@@ -38,18 +42,45 @@ class ArbitrageStrategy:
             or not -1 <= time() - q.exchange_time <= self.settings.max_age
             for q in quotes
         ):
-            return False
+            return None
         a, b = quotes
-        if min(a.bid, a.ask, b.bid, b.ask) <= 0:
-            return False
-        premium = ((a.bid + a.ask) / (b.bid + b.ask) - 1) * BPS
-        return abs(premium - self.settings.midline_bps) >= self.settings.entry_bps / 2
+        if not all(p.is_finite() and p > 0 for p in (a.bid, a.ask, b.bid, b.ask)):
+            return None
+        if a.bid > a.ask or b.bid > b.ask:
+            return None
+        return ((a.bid + a.ask) / (b.bid + b.ask) - 1) * BPS
+
+    def observe(self, base, left, right):
+        """独立于是否有套利机会采样，避免只记录大价差而产生选择偏差。"""
+        premium = self.premium(base, left, right)
+        if not self.settings.spread_window_seconds or premium is None:
+            return None
+        return self.history.observe((left.name, right.name, base), premium)
+
+    def baseline(self, base, left, right):
+        """获得历史均值加手动偏移；预热不充分时返回 None，禁止新开仓。"""
+        if not self.settings.spread_window_seconds:
+            return self.settings.midline_bps
+        value = self.history.baseline((left.name, right.name, base))
+        return None if value is None else value + self.settings.midline_bps
+
+    def candidate(self, base, left, right) -> bool:
+        """轻量报价偏离自身历史基准才订阅深度；资金费在深度阶段获取并校验。"""
+        premium, baseline = self.premium(base, left, right), self.baseline(base, left, right)
+        return (
+            premium is not None
+            and baseline is not None
+            and abs(premium - baseline) >= self.settings.entry_bps / 2
+        )
 
     def opportunity(self, base, left, right) -> Opportunity | None:
         """尝试两方向，取扣除入场费、预留退出费及滑点后净溢价较大的一组。"""
+        baseline = self.baseline(base, left, right)
+        if baseline is None or baseline <= -BPS:
+            return None
         options = [
-            self._direction(base, left, right, -self.settings.midline_bps),
-            self._direction(base, right, left, self.settings.midline_bps),
+            self._direction(base, left, right, reverse_premium(baseline)),
+            self._direction(base, right, left, baseline),
         ]
         return max((o for o in options if o), key=lambda o: o.net_edge_bps, default=None)
 
@@ -65,6 +96,9 @@ class ArbitrageStrategy:
             return None
         a, b = buy.instruments[base], sell.instruments[base]
         fee_bps = (a.taker_fee + b.taker_fee) * BPS * 2
+        funding = funding_cost_per_unit(base, buy, sell, self.settings)
+        if funding is None:
+            return None
         hurdle = self.settings.entry_bps + baseline + fee_bps + self.settings.slippage_bps * 2
         # 只累计边际价差也合格的档位，防止用最优档利润补贴深处劣价。
         i = j = 0
@@ -72,7 +106,8 @@ class ArbitrageStrategy:
         quantity, max_price = ZERO, ZERO
         while i < len(buy_book.asks) and j < len(sell_book.bids):
             ask, bid = buy_book.asks[i], sell_book.bids[j]
-            if (bid.price / ask.price - 1) * BPS < hurdle:
+            gross = (bid.price / ask.price - 1) * BPS
+            if gross - baseline < self.settings.entry_bps or gross < hurdle + funding / ask.price * BPS:
                 break
             chunk = min(a_left, b_left) * self.settings.take_fraction
             max_price = max(max_price, ask.price, bid.price)
@@ -96,7 +131,11 @@ class ArbitrageStrategy:
             return None
         buy_value, buy_worst = buy_book.sweep(Side.BUY, quantity)
         sell_value, sell_worst = sell_book.sweep(Side.SELL, quantity)
-        net = (sell_value / buy_value - 1) * BPS - fee_bps - self.settings.slippage_bps * 2
+        net = (
+            ((sell_value - funding * quantity) / buy_value - 1) * BPS
+            - fee_bps
+            - self.settings.slippage_bps * 2
+        )
         if net < self.settings.entry_bps + baseline:
             return None
         buy_limit = buy.round_limit(base, Side.BUY, buy_worst * (1 + self.settings.slippage_bps / BPS))
@@ -104,7 +143,9 @@ class ArbitrageStrategy:
         return Opportunity(
             Order(buy.name, base, Side.BUY, quantity, buy_limit),
             Order(sell.name, base, Side.SELL, quantity, sell_limit),
-            net,
+            net - baseline,
+            funding * quantity,
+            baseline,
         )
 
     def closing_pnl(self, position: Position, exchanges: dict) -> D | None:

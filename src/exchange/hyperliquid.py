@@ -8,7 +8,7 @@ from time import time
 import aiohttp
 
 from exchange.base import Exchange, ValidationError
-from models import ZERO, Book, D, Fill, Instrument, Level, OrderStatus, Quote
+from models import ZERO, Book, D, Fill, Funding, Instrument, Level, OrderStatus, Quote
 from normalization import normalize
 from transport import WebSocketTransport
 
@@ -196,6 +196,14 @@ class HyperliquidExchange(Exchange):
         await self.transport.send(
             {
                 "method": "subscribe" if enabled else "unsubscribe",
+                "subscription": {"type": "activeAssetCtx", "coin": self.instruments[base].native},
+            }
+        )
+        if not enabled:
+            self.funding.pop(base, None)
+        await self.transport.send(
+            {
+                "method": "subscribe" if enabled else "unsubscribe",
                 "subscription": {"type": "l2Book", "coin": self.instruments[base].native},
             }
         )
@@ -231,6 +239,23 @@ class HyperliquidExchange(Exchange):
             self.transport.resolve(str(data["id"]), data["response"])
         elif channel == "error":
             raise RuntimeError("Hyperliquid subscription rejected")
+        elif channel == "activeAssetCtx":
+            instrument = self.by_native.get(data.get("coin"))
+            ctx = data.get("ctx", {})
+            if (
+                instrument
+                and instrument.base in self.depth
+                and ctx.get("funding") is not None
+                and ctx.get("markPx")
+            ):
+                now = time()
+                self.funding[instrument.base] = Funding(
+                    D(str(ctx["funding"])),
+                    instrument.price(D(str(ctx["markPx"])), self.settings.fx(instrument.quote)),
+                    3600,
+                    (int(now) // 3600 + 1) * 3600,
+                )
+                self.changed.set()
         elif channel == "allMids":
             for native, raw in data["mids"].items():
                 instrument = self.by_native.get(native)
