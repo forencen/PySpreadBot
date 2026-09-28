@@ -27,12 +27,11 @@ class Settings:
     funding_horizon_hours: Decimal = Decimal("8")
     funding_max_age: float = 60.0
     funding_schedule_max_age: float = 120.0
-    spread_sample_seconds: float = 10.0
-    spread_window_seconds: float = 3600.0
-    spread_min_samples: int = 60
+    candle_lookback_bars: int = 96
+    candle_min_bars: int = 16
+    candle_retry_seconds: float = 30.0
     spread_min_range_bps: Decimal = Decimal("5")
     spread_min_change_ratio: Decimal = Decimal("0.10")
-    spread_db_path: Path = Path("data/spreads.sqlite3")
     slippage_bps: Decimal = Decimal("5")
     exit_profit: Decimal = Decimal("0.1")
     stop_loss: Decimal = Decimal("2")
@@ -110,10 +109,15 @@ def load_settings(env_file: str | Path = ".env", *, mode: str | None = None) -> 
     float_fields |= {
         "funding_max_age",
         "funding_schedule_max_age",
-        "spread_sample_seconds",
-        "spread_window_seconds",
+        "candle_retry_seconds",
     }
-    int_fields = {"spread_min_samples", "max_positions", "max_depth_subscriptions", "orders_per_minute"}
+    int_fields = {
+        "candle_lookback_bars",
+        "candle_min_bars",
+        "max_positions",
+        "max_depth_subscriptions",
+        "orders_per_minute",
+    }
     for name in Settings.__dataclass_fields__:
         if name == "hl_routes":
             continue  # 仅启动器生成，不能由环境变量注入路由。
@@ -130,7 +134,7 @@ def load_settings(env_file: str | Path = ".env", *, mode: str | None = None) -> 
             values[name] = int(raw)
         elif name in {"symbols", "exchanges", "hl_dexs"}:
             values[name] = tuple(x.strip() for x in raw.split(",") if x.strip())
-        elif name in {"cache_dir", "spread_db_path"}:
+        elif name == "cache_dir":
             values[name] = Path(raw)
         elif name in {"aliases", "hl_dex_fees", "quote_usd_rates"}:
             values[name] = json.loads(raw)
@@ -163,14 +167,11 @@ def load_settings(env_file: str | Path = ".env", *, mode: str | None = None) -> 
         "*" in settings.hl_dexs and settings.hl_dexs != ("*",)
     ):
         raise ValueError("HL_DEXS must contain distinct dex names or a single *")
-    if settings.spread_window_seconds < 0 or not settings.spread_window_seconds < float("inf"):
-        raise ValueError("SPREAD_WINDOW_SECONDS must be finite and nonnegative")
-    if settings.spread_window_seconds and (
-        settings.spread_min_samples < 2
-        or settings.spread_window_seconds < settings.spread_sample_seconds * settings.spread_min_samples
-    ):
-        raise ValueError("Spread window must fit at least SPREAD_MIN_SAMPLES >= 2 samples")
-    for name in (float_fields | int_fields) - {"spread_window_seconds"}:
+    if not 0 <= settings.candle_lookback_bars <= 1000 or not 2 <= settings.candle_min_bars <= 1000:
+        raise ValueError("CANDLE_LOOKBACK_BARS must be 0..1000; CANDLE_MIN_BARS must be 2..1000")
+    if settings.candle_lookback_bars and settings.candle_min_bars > settings.candle_lookback_bars:
+        raise ValueError("CANDLE_MIN_BARS cannot exceed CANDLE_LOOKBACK_BARS")
+    for name in (float_fields | int_fields) - {"candle_lookback_bars"}:
         value = getattr(settings, name)
         if not 0 < value < float("inf"):
             raise ValueError(f"{name} must be finite and positive")

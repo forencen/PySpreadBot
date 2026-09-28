@@ -9,7 +9,6 @@ from coordination import Coordinator
 from exchange import create_exchange
 from exchange.base import ValidationError
 from execution import ExecutionEngine
-from spread_store import SpreadStore
 from strategy import ArbitrageStrategy
 
 log = logging.getLogger(__name__)
@@ -29,7 +28,8 @@ class PairWorker:
         self.coordinator = Coordinator(settings.redis_url, settings.namespace, settings.mode)
         self.exchanges = {name: create_exchange(name, settings, self.coordinator) for name in names}
         self.strategy = ArbitrageStrategy(settings)
-        self.spread_store = SpreadStore(settings)
+        self.candle_tasks = {}
+        self.candle_attempts = {}
         self.execution = ExecutionEngine(
             settings, self.exchanges, self.coordinator, self.owner, self.strategy
         )
@@ -65,23 +65,13 @@ class PairWorker:
                 await self._wait_for_market()
                 await self._maintenance()
                 await self._manage_positions()
-                samples = []
                 for base in sorted(common):
                     if base not in left.instruments or base not in right.instruments:
                         continue
-                    stats = self.strategy.observe(base, left, right)
-                    if stats is not None:
-                        samples.append({"left": left.name, "right": right.name, "base": base, **stats})
-                        await self.coordinator.save_spread(
-                            left.name,
-                            right.name,
-                            base,
-                            stats,
-                            int(self.settings.spread_window_seconds / self.settings.spread_sample_seconds)
-                            + 1,
-                        )
                     if base in self.execution.positions:
                         continue
+                    if self.strategy.price_candidate(base, left, right):
+                        self._ensure_candles(base)
                     candidate = self.strategy.candidate(base, left, right)
                     if not candidate:
                         self.armed.pop(base, None)
@@ -116,11 +106,42 @@ class PairWorker:
                     else:
                         await self.execution.open(opportunity)
                         self.armed.pop(base, None)
-                await self.spread_store.save(samples)
         finally:
+            for task in self.candle_tasks.values():
+                task.cancel()
+            await asyncio.gather(*self.candle_tasks.values(), return_exceptions=True)
             for venue in self.exchanges.values():
                 await venue.close()
             await self.coordinator.close()
+
+    def _ensure_candles(self, base):
+        """按需启动历史补取，每个进程最多四个标的并发；新收盘桶或断线后重补。
+
+        网络请求不阻塞入场循环。失败后按配置退避；未具备有效 K 线的标的不入场。
+        """
+        if not self.settings.candle_lookback_bars:
+            return
+        for key, task in list(self.candle_tasks.items()):
+            if task.done():
+                del self.candle_tasks[key]
+        latest = int(time()) // 900 * 900 - 900
+        if all(latest in venue.candles.get(base, {}) for venue in self.exchanges.values()):
+            return
+        if base in self.candle_tasks or len(self.candle_tasks) >= 4:
+            return
+        if monotonic() - self.candle_attempts.get(base, float("-inf")) < self.settings.candle_retry_seconds:
+            return
+        self.candle_attempts[base] = monotonic()
+        self.candle_tasks[base] = asyncio.create_task(self._load_candles(base))
+
+    async def _load_candles(self, base):
+        """低频并发获取两边 K 线；失败仅跳过该标的，下一次候选检查可重试。"""
+        results = await asyncio.gather(
+            *(venue.load_candles(base) for venue in self.exchanges.values()), return_exceptions=True
+        )
+        for result in results:
+            if isinstance(result, Exception):
+                log.warning("%s candle history unavailable (%s)", base, type(result).__name__)
 
     async def _wait_for_market(self) -> None:
         """任一交易所行情更新即唤醒；定时唤醒只为对账及心跳，不轮询 REST 行情。"""

@@ -85,7 +85,7 @@ def settings():
         take_fraction=D("0.5"),
         funding_horizon_hours=D(0),
         spread_min_change_ratio=D(0),
-        spread_window_seconds=0,
+        candle_lookback_bars=0,
     )
 
 

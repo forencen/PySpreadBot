@@ -8,7 +8,7 @@ from time import time
 import aiohttp
 
 from exchange.base import Exchange, ValidationError
-from models import ZERO, Book, D, Fill, Funding, Instrument, Level, OrderStatus, Quote
+from models import ZERO, Book, Candle, D, Fill, Funding, Instrument, Level, OrderStatus, Quote
 from normalization import normalize
 from transport import WebSocketTransport
 
@@ -167,6 +167,31 @@ class HyperliquidExchange(Exchange):
         if self.dex and self.settings.mode == "live" and self.dex not in self.settings.hl_dex_fees:
             raise ValidationError(f"Configure HL_DEX_FEES for {self.dex} before live trading")
 
+    async def fetch_candles(self, base, start, end):
+        """通过 WSS candleSnapshot 补取 15m 历史；HIP-3 必须使用完整 dex:coin。"""
+        instrument = self.instruments[base]
+        rows = await self._post(
+            "info",
+            {
+                "type": "candleSnapshot",
+                "req": {
+                    "coin": instrument.native,
+                    "interval": "15m",
+                    "startTime": start * 1000,
+                    "endTime": end * 1000 - 1,
+                },
+            },
+        )
+        fx = self.settings.fx(instrument.quote)
+        return [
+            Candle(
+                int(row["t"]) // 1000,
+                *(instrument.price(D(str(row[key])), fx) for key in ("o", "h", "l", "c")),
+            )
+            for row in rows
+            if row.get("s") == instrument.native and row.get("i") == "15m" and int(row["t"]) % 900000 == 0
+        ]
+
     async def connect(self, symbols):
         """建立公共行情与交易共用 WSS，live 模式只在本地加载签名钱包。"""
         self.symbols = symbols
@@ -230,7 +255,16 @@ class HyperliquidExchange(Exchange):
         )
         if response["type"] == "error":
             raise RuntimeError("Hyperliquid post failed")
-        return response["payload"]
+        result = response["payload"]
+        # WSS info 比 HTTP 多一层 {type, data}；action 响应不使用这层包装。
+        if (
+            kind == "info"
+            and isinstance(result, dict)
+            and result.get("type") == payload.get("type")
+            and "data" in result
+        ):
+            return result["data"]
+        return result
 
     async def handle_message(self, message):
         """分发 post 回复、全市场中间价和完整深度快照，不把中间价当作实际成交价。"""

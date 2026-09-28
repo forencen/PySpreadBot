@@ -6,7 +6,7 @@ from time import monotonic, time
 from uuid import uuid4
 
 from exchange.base import Exchange, ValidationError
-from models import Book, D, Fill, Funding, Instrument, Level, Order, OrderStatus, Quote
+from models import Book, Candle, D, Fill, Funding, Instrument, Level, Order, OrderStatus, Quote
 from normalization import normalize
 from transport import WebSocketTransport
 
@@ -56,6 +56,23 @@ class GateExchange(Exchange):
                 )
             )
         return instruments, raw
+
+    async def fetch_candles(self, base, start, end):
+        """Gate 历史 K 线使用低频 HTTP，价格按报价币和合约单位归一化。
+
+        WSS 行情和下单不受影响；to 为闭区间，减一秒排除当前未收盘桶。
+        """
+        instrument = self.instruments[base]
+        async with self.session.get(
+            f"{self.http_url}/futures/usdt/candlesticks",
+            params={"contract": instrument.native, "interval": "15m", "from": start, "to": end - 1},
+            proxy=self.settings.http_proxy,
+        ) as response:
+            response.raise_for_status()
+            rows = await response.json()
+        fx = self.settings.fx(instrument.quote)
+        return [Candle(int(row["t"]), *(instrument.price(D(str(row[key])), fx)
+                       for key in ("o", "h", "l", "c"))) for row in rows]
 
     async def connect(self, symbols):
         """建立支持十进制张数响应的 WSS；私有登录仅在 live 模式执行。"""

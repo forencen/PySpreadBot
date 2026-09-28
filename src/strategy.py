@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from math import lcm
 from time import monotonic, time
 
-from market_analysis import SpreadHistory, funding_cost_per_unit, reverse_premium
+from market_analysis import candle_spread_stats, funding_cost_per_unit, reverse_premium
 from models import BPS, ZERO, D, Order, Position, Side, floor_step
 
 
@@ -29,9 +29,8 @@ class ArbitrageStrategy:
     """按可成交净价差选择方向，非零中枢按交易所组合固定顺序解释。"""
 
     def __init__(self, settings):
-        """保存门槛与等时间采样历史；历史仅判断价差是否变化，不从盈利中扣除均值。"""
+        """保存入场门槛；15m K 线仅判断价差是否变化，不从盈利中扣除均值。"""
         self.settings = settings
-        self.history = SpreadHistory(settings)
 
     def premium(self, base, left, right):
         """新鲜双边中间价生成固定方向溢价，报价无效时不采样、不触发候选。"""
@@ -50,20 +49,22 @@ class ArbitrageStrategy:
             return None
         return ((a.bid + a.ask) / (b.bid + b.ask) - 1) * BPS
 
-    def observe(self, base, left, right):
-        """独立于是否有套利机会采样，避免只记录大价差而产生选择偏差。"""
-        premium = self.premium(base, left, right)
-        if not self.settings.spread_window_seconds or premium is None:
-            return None
-        return self.history.observe((left.name, right.name, base), premium)
-
     def baseline(self, base, left, right):
-        """固定中枢保持 MIDLINE_BPS 配置；历史只作变化过滤，不自动变成中枢。"""
-        if self.settings.spread_window_seconds and not self.history.changing(
-            (left.name, right.name, base), self.premium(base, left, right)
-        ):
-            return None
+        """只用已收盘 15m K 线检查变化，历史均值不抵扣实际收益。"""
+        if self.settings.candle_lookback_bars:
+            stats = candle_spread_stats(base, left, right, self.settings)
+            if (
+                stats is None
+                or stats["range_bps"] <= self.settings.spread_min_range_bps
+                or stats["change_ratio"] < self.settings.spread_min_change_ratio
+            ):
+                return None
         return self.settings.midline_bps
+
+    def price_candidate(self, base, left, right):
+        """只做当前报价初筛，决定是否后台加载 K 线；不能据此直接下单。"""
+        premium = self.premium(base, left, right)
+        return premium is not None and abs(premium - self.settings.midline_bps) >= self.settings.entry_bps / 2
 
     def candidate(self, base, left, right) -> bool:
         """历史确认价差在变化且当前价差达到候选门槛才订阅深度。"""

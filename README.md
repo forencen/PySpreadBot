@@ -47,7 +47,7 @@ PyCharm 的 Parameters 可填写上述选项。该入口强制 `observe`，即�
 1. 读取合约元数据：最小/最大数量、数量步长、合约乘数、价格精度、下架状态、价格偏离限制等。
 2. WSS 维护轻量行情：Gate 买卖一及标记价、Hyperliquid 全市场中间价。
 3. 初筛出现价格差后，通过 WSS 订阅该标的深度。Gate 使用 `futures.obu` 50 档，Hyperliquid 使用 `l2Book`。长期不满足初筛的空仓标的自动退订深度。
-4. 按固定时间采样确认交易对的价差在变化；再逐档计算可成交数量，扣除手续费、滑点和预计持仓期资金费，再检查规模及信号持续时间。
+4. 使用两所时间对齐的 15 分钟已收盘 K 线确认价差在变化；再逐档计算可成交数量，扣除手续费、滑点和预计持仓期资金费，再检查规模及信号持续时间。
 5. Redis 原子获取基础币归属；确认账户没有遗留仓位，两边基础校验均通过，发送前再次核对可成交价差。
 6. 先写订单 intent，再通过两边 WSS 并发发送 IOC 限价单；查明最终成交。多成交的一边以 `reduce-only` 削减差额。
 7. 对账并维护持仓，持续计算当前双边反向深度可实现的预计 PnL，触发止盈/止损时平仓。确认双方实际仓位均为零后释放归属。
@@ -152,9 +152,9 @@ WSS_PROXY=http://127.0.0.1:7890
 FUNDING_HORIZON_HOURS=8
 FUNDING_MAX_AGE=60
 FUNDING_SCHEDULE_MAX_AGE=120
-SPREAD_SAMPLE_SECONDS=10
-SPREAD_WINDOW_SECONDS=3600
-SPREAD_MIN_SAMPLES=60
+CANDLE_LOOKBACK_BARS=96
+CANDLE_MIN_BARS=16
+CANDLE_RETRY_SECONDS=30
 ```
 
 **资金费预算**：以预计持仓 `FUNDING_HORIZON_HOURS` 小时为窗口，根据每所下一结算时间和间隔分别计算结算次数，窗口末端的结算也计入。每单位基础币的净资金费成本为：
@@ -166,25 +166,25 @@ SPREAD_MIN_SAMPLES=60
 
 价格先折算为 USD/基础币。正结果是支出，负结果是收入；预估费率和标记价假定在持仓期内不变。Gate 的 WSS `futures.tickers` 提供当前费率，合约元数据提供结算周期/下一时间，并以最多 `FUNDING_SCHEDULE_MAX_AGE / 2` 秒间隔刷新。Hyperliquid 原生及 HIP-3 在订阅深度时同时订阅 `activeAssetCtx`，按小时结算。资金费数据缺失或过期、结算周期未知时不新开仓，不能默认为零；下单前重新计算。`FUNDING_HORIZON_HOURS=0` 显式关闭此过滤。
 
-**历史价差过滤**：每个有序交易所组合、每个基础币独立统计 `（左所中间价 / 右所中间价 − 1）× 10000`。默认每 10 秒采样一次，窗口 1 小时，至少 60 份已完成时段样本（约 10 分钟）。同一桶的密集行情不会增加样本权重；断线不补样本，重启重新预热。
+**15 分钟 K 线过滤**：从交易所补取真实历史 OHLC，先按单位和报价币折算为 USD/基础币，再按 UTC 起始时间对齐。只比较两所同一个已收盘桶的收盘价：`（左所 close / 右所 close − 1）× 10000`。不使用未收盘 K 线，不拿两所不同时间出现的 high/low 相除构造虚假价差，不填补缺口。
 
-历史仅判断价差是否变化：将窗口有效样本与当前价差合并，`最大价差 − 最小价差 > SPREAD_MIN_RANGE_BPS` 才放行，默认阈值为 5 bps。长期固定 100 bps 被过滤；在 80～120 bps 之间变化时，即使当前恰好为均值 100 bps，也可以进入盈利检查。小幅报价噪声不视为有效变化。该条件不预测价差收敛，历史上的较大波动在滑动窗口内仍会影响判断。
+默认回看最近 96 根（24 小时），要求最近至少 16 根（4 小时）连续对齐，且必须包含最新已收盘桶。真实历史可立即补取，无需运行后等待 4 小时采样；历史不足或休市缺少最新数据时不新开仓。当前报价只用于候选筛选和深度执行，不混入历史 K 线统计。
 
-新增相对变化率过滤：`（最大价差 − 最小价差）/ max(平均绝对价差, 1 bps)`，默认 `SPREAD_MIN_CHANGE_RATIO=0.10`（10%）。必须同时满足绝对极差和相对变化率门槛。95～100 bps 在样本均匀时约为 5.1%，被过滤；85～95 bps 约为 11.1%，可以继续盈利检查。实际分母由窗口样本决定。负价差取绝对值计算平均水平，防止正负相消；1 bps 分母下限避免零附近放大噪声。
-
-这里的“变化率”指相对波动幅度，不是单位时间速度，也不能证明未来收敛。设为 0 可只保留原来的绝对幅度过滤。新样本的 `change_ratio` 同时出现在 Redis 统计和 SQLite `payload` JSON 中，保持旧表兼容；旧行未提供该字段。
-
-盈利检查使用当前可成交价差，扣除手续费、滑点与资金费后达到 `ENTRY_BPS`；**不再减去历史均值，也不要求当前偏离均值**。`MIDLINE_BPS` 保留为手动固定偏移，默认零。下单前重新检查变化条件与资金费；`SPREAD_WINDOW_SECONDS=0` 可关闭变化过滤。
+原来的两层变化门槛继续使用：历史极差 `max − min > SPREAD_MIN_RANGE_BPS`，相对变化率 `(max − min) / max(平均绝对价差, 1 bps) >= SPREAD_MIN_CHANGE_RATIO`。默认分别为 5 bps 和 10%。长期固定价差会被过滤；在样本均匀时，95～100 bps 约为 5.1%，85～95 bps 约为 11.1%。历史变化不代表未来一定收敛。
 
 ```dotenv
+CANDLE_LOOKBACK_BARS=96
+CANDLE_MIN_BARS=16
+CANDLE_RETRY_SECONDS=30
 SPREAD_MIN_RANGE_BPS=5
 SPREAD_MIN_CHANGE_RATIO=0.10
-SPREAD_DB_PATH=data/spreads.sqlite3
 ```
 
-逐时段价差入库到 SQLite 的 `spread_samples` 表，保存完整交易所/DEX 标识、基础币、采样间隔、时间、价差、均值、极值、极差和样本数。Decimal 以文本保存不丢精度；同一采样键去重，多进程共享 WAL，按循环批量写入工作线程。数据库长期保留历史、不自动清理，可用于后续统计查询；重启不会直接复用旧历史进行交易。
+候选标的后台按需加载 K 线，每个组合最多并发加载四个标的，不阻塞实时行情接收。Gate 的历史 K 线用低频 HTTP（沿用 HTTP_PROXY），Hyperliquid 用 WSS `candleSnapshot`（HIP-3 使用完整 `dex:coin`）。新收盘桶出现或断线后重新补取；失败按 `CANDLE_RETRY_SECONDS` 退避，缺少有效历史时不下单。`CANDLE_LOOKBACK_BARS=0` 显式关闭 K 线过滤。
 
-`python src/main.py status` 的 `spreads` 仍展示最新统计，Redis 保留有界历史缓存；SQLite 是独立持久化历史。数据库默认在 `data/` 下，不提交 GitHub。
+K 线和计算结果仅驻留进程内存：**不再创建 SQLite、不写价差数据库，也不写 Redis 价差历史**。旧数据库文件不会自动删除，但程序不再读写；旧价差采样/数据库配置已从示例与本地 `.env` 移除。Redis 继续保存订单、持仓、锁及 PnL。`status` 不再展示旧的持久化价差统计。
+
+盈利门槛仍使用当前可成交价差减手续费、滑点和预计资金费，达到 `ENTRY_BPS` 才下单；历史均值不抵扣盈利，`MIDLINE_BPS` 仍为手动固定偏移。下单前再次验证 K 线是否最新、变化条件是否达标。
 
 ```text
 预计平仓 PnL
@@ -225,8 +225,7 @@ PySpreadBot/
 │   ├── cache.py             # 合约规则原子缓存
 │   ├── transport.py         # WSS 重连、响应关联、推送分发
 │   ├── coordination.py      # Redis 归属、日志、nonce、订单预算
-│   ├── market_analysis.py   # 资金费预算、固定时间采样及变化检测
-│   ├── spread_store.py      # SQLite 价差历史持久化
+│   ├── market_analysis.py   # 资金费预算、15m K 线对齐及价差变化检测
 │   ├── strategy.py          # 深度价差、共同步长、平仓 PnL
 │   ├── execution.py         # 双腿状态机、补偿、对账
 │   ├── engine.py            # 组合运行循环和持仓维护
@@ -249,3 +248,5 @@ PySpreadBot/
 ```
 
 资金费协议依据：[Gate WSS ticker](https://www.gate.com/docs/developers/futures/ws/en/)、[Gate 合约日程](https://www.gate.com/docs/developers/apiv4/en/futures/)、[Hyperliquid WSS 上下文](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/websocket/subscriptions)、[Hyperliquid 小时结算](https://hyperliquid.gitbook.io/hyperliquid-docs/trading/funding)。
+
+K 线接口依据：[Gate 历史 K 线](https://www.gate.com/docs/developers/apiv4/en/futures/)、[Hyperliquid candleSnapshot](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint)。

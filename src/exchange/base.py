@@ -4,7 +4,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import replace
 from decimal import ROUND_CEILING, ROUND_FLOOR
-from time import monotonic
+from time import monotonic, time
 
 import aiohttp
 
@@ -34,6 +34,8 @@ class Exchange(ABC):
         self.by_native: dict[str, Instrument] = {}
         self.quotes: dict[str, Quote] = {}
         self.funding = {}
+        self.candles = {}
+        self.candle_generation = 0
         self.books: dict[str, Book] = {}
         self.depth: set[str] = set()
         self.symbols: set[str] = set()
@@ -68,6 +70,27 @@ class Exchange(ABC):
     async def fetch_instruments(self) -> tuple[list[Instrument], object]:
         """通过低频元数据 API 获取全部受支持合约，包括最小数量、精度及限制。"""
         raise NotImplementedError
+
+    async def fetch_candles(self, base: str, start: int, end: int):
+        """返回 [start, end) 内 15 分钟 K 线；由交易所实现历史接口，默认不支持。"""
+        raise NotImplementedError("15m candles unavailable on this exchange")
+
+    async def load_candles(self, base: str) -> None:
+        """低频补取最近已收盘 K 线；替换有界内存缓存，不写文件或数据库。
+
+        时间边界在请求前固定，因此跨越下一根 K 线时不会误把未完成数据计入。
+        断线或规则身份变化期间的迟到请求不会恢复已失效缓存。
+        """
+        end = int(time()) // 900 * 900
+        start = end - self.settings.candle_lookback_bars * 900
+        generation, instrument = self.candle_generation, self.instruments[base]
+        rows = await self.fetch_candles(base, start, end)
+        if generation != self.candle_generation or self.instruments.get(base) != instrument:
+            return
+        self.candles[base] = {
+            row.start: row for row in rows if row.valid() and start <= row.start and row.start + 900 <= end
+        }
+        self.changed.set()
 
     @abstractmethod
     async def connect(self, symbols: set[str]) -> None:
@@ -105,6 +128,8 @@ class Exchange(ABC):
 
     def invalidate(self) -> None:
         """断线立即使全部本地行情失效，阻止使用重连前的残留盘口。"""
+        self.candle_generation += 1
+        self.candles.clear()
         self.funding.clear()
         self.books.clear()
         self.quotes.clear()

@@ -1,6 +1,5 @@
-"""入场前资金费预算和按固定时间采样的跨所价差历史。"""
+"""入场前资金费预算和对齐的 15 分钟 K 线价差分析。"""
 
-from collections import deque
 from math import floor, isfinite
 from statistics import mean
 from time import monotonic, time
@@ -46,76 +45,41 @@ def spread_change_ratio(values):
     return (max(values) - min(values)) / max(mean(abs(value) for value in values), D(1))
 
 
-class SpreadHistory:
-    """每个有序交易所组合/基础币独立保存等时间权重样本，不按消息数量加权。"""
+def candle_spread_stats(base, left, right, settings, now=None):
+    """按 UTC 桶对齐两所已收盘 K 线，用收盘价计算历史价差，不拼接异步高低点。
 
-    def __init__(self, settings):
-        """保存滑动窗口参数；历史只在当前进程有效，重启重新预热。"""
-        self.settings = settings
-        self.rows = {}
-        self.pending = {}
-
-    def observe(self, key, premium, now=None):
-        """每个时间桶只采一份新鲜报价；进入后续桶才把上一桶纳入基准。
-
-        不补齐断线期间的数据，也不把当前触发信号的样本用于自己的历史基准。
-        返回新完成的样本统计，调用方按采样频率持久化，而不是逐行情写 Redis。
-        """
-        now = time() if now is None else now
-        interval = self.settings.spread_sample_seconds
-        bucket = floor(now / interval) * interval
-        rows = self.rows.setdefault(key, deque())
-        while rows and rows[0][0] < now - self.settings.spread_window_seconds:
-            rows.popleft()
-        previous = self.pending.get(key)
-        record = None
-        if previous is not None and previous[0] < bucket:
-            if previous[0] >= now - self.settings.spread_window_seconds:
-                rows.append(previous)
-                values = [value for _, value in rows]
-                record = {
-                    "sample_at": previous[0],
-                    "spread_bps": previous[1],
-                    "mean_bps": mean(values),
-                    "min_bps": min(values),
-                    "max_bps": max(values),
-                    "samples": len(values),
-                    "range_bps": max(values) - min(values),
-                    "change_ratio": spread_change_ratio(values),
-                    "timestamp": now,
-                }
-        if previous is None or previous[0] != bucket:
-            self.pending[key] = (bucket, premium)
-        return record
-
-    def baseline(self, key, now=None):
-        """返回足够且连续到近期的历史均值；样本不足或长时间断流时拒绝入场。"""
-        now = time() if now is None else now
-        rows = self.rows.get(key, ())
-        values = [value for stamp, value in rows if stamp >= now - self.settings.spread_window_seconds]
-        if len(values) < self.settings.spread_min_samples or not rows:
-            return None
-        if now - rows[-1][0] > self.settings.spread_sample_seconds * 3:
-            return None
-        return mean(values)
-
-    def changing(self, key, current, now=None):
-        """绝对极差和相对变化率都达标才放行，不要求偏离均值。
-
-        当前值参与变化检查可及时识别新变化；样本数/新鲜度仍只依赖历史已完成桶。
-        极差阈值用于排除小幅报价噪声，不能据此保证未来价差会收敛。
-        """
-        now = time() if now is None else now
-        if current is None or self.baseline(key, now) is None:
-            return False
-        values = [
-            value for stamp, value in self.rows[key] if stamp >= now - self.settings.spread_window_seconds
-        ]
-        values.append(current)
-        return (
-            max(values) - min(values) > self.settings.spread_min_range_bps
-            and spread_change_ratio(values) >= self.settings.spread_min_change_ratio
-        )
+    只取最近配置根数内的交集，要求最新完整桶及至少 min_bars 根连续数据。
+    缺口不填充、未收盘不参与；否则不能证明两所对应的是同一历史区间。
+    """
+    now = time() if now is None else now
+    end = int(now) // 900 * 900
+    cutoff = end - settings.candle_lookback_bars * 900
+    a, b = left.candles.get(base, {}), right.candles.get(base, {})
+    stamps = sorted(
+        stamp
+        for stamp in a.keys() & b.keys()
+        if cutoff <= stamp < end and a[stamp].valid() and b[stamp].valid()
+    )
+    if len(stamps) < settings.candle_min_bars or not stamps or stamps[-1] != end - 900:
+        return None
+    recent = stamps[-settings.candle_min_bars :]
+    if any(y - x != 900 for x, y in zip(recent, recent[1:], strict=False)):
+        return None
+    values = [(a[stamp].close / b[stamp].close - 1) * BPS for stamp in stamps]
+    return {
+        "interval": "15m",
+        "left": left.name,
+        "right": right.name,
+        "base": base,
+        "first_at": stamps[0],
+        "last_at": stamps[-1],
+        "samples": len(values),
+        "mean_bps": mean(values),
+        "min_bps": min(values),
+        "max_bps": max(values),
+        "range_bps": max(values) - min(values),
+        "change_ratio": spread_change_ratio(values),
+    }
 
 
 def reverse_premium(premium):

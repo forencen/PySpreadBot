@@ -5,12 +5,11 @@ from time import monotonic, time
 
 import pytest
 
-from config import Settings, load_settings
 from exchange.gate import GateExchange
 from exchange.hyperliquid import HyperliquidExchange
 from execution import ExecutionEngine
-from market_analysis import SpreadHistory, funding_cost_per_unit, reverse_premium
-from models import Book, D, Funding, Instrument, Level, Quote
+from market_analysis import funding_cost_per_unit
+from models import D, Funding, Instrument
 from strategy import ArbitrageStrategy
 
 
@@ -74,46 +73,6 @@ def test_funding_rejects_raw_profitable_opportunity(venues, settings):
     assert opportunity and opportunity.funding_cost_usd > 0
 
 
-def test_time_weighted_samples_warmup_expiry_and_no_lookahead():
-    """每桶一条、预热后生效；当前异常价不污染自身基准，长时间断流失效。"""
-    history = SpreadHistory(
-        Settings(spread_sample_seconds=10, spread_window_seconds=60, spread_min_samples=3)
-    )
-    key = ("gate", "hyperliquid:xyz", "HOOD")
-    history.observe(key, D(100), 100)
-    for _ in range(100):
-        history.observe(key, D(999), 101)
-    history.observe(key, D(100), 110)
-    history.observe(key, D(100), 120)
-    assert history.baseline(key, 120) is None
-    record = history.observe(key, D(500), 130)
-    assert record["samples"] == 3 and history.baseline(key, 130) == 100
-    assert history.baseline(("gate", "hyperliquid:io", "HOOD"), 130) is None
-    assert history.baseline(key, 170) is None
-    history.observe(key, D(500), 300)
-    assert history.baseline(key, 300) is None
-
-
-def test_stationary_spread_rejected_and_deviation_admitted(venues, settings, monkeypatch):
-    """长期固定价差即使高于 ENTRY_BPS 也不交易；偏离历史中枢足够大才通过。"""
-    now = time()
-    monkeypatch.setattr("market_analysis.time", lambda: now)
-    settings = replace(settings, spread_sample_seconds=1, spread_window_seconds=60, spread_min_samples=3)
-    strategy = ArbitrageStrategy(settings)
-    a, b = venues.values()
-    premium = strategy.premium("BTC", a, b)
-    for stamp in (now - 4, now - 3, now - 2, now - 1):
-        strategy.history.observe((a.name, b.name, "BTC"), premium, stamp)
-    assert abs(premium) > settings.entry_bps
-    assert not strategy.candidate("BTC", a, b)
-    assert strategy.opportunity("BTC", a, b) is None
-    b.books["BTC"] = Book((Level(D(108), D(10)),), (Level(D(109), D(10)),))
-    b.quotes["BTC"] = Quote(D(108), D(109))
-    assert strategy.candidate("BTC", a, b)
-    assert strategy.opportunity("BTC", a, b) is not None
-    assert reverse_premium(D(1000)) == -D(1000) / D("1.1")
-
-
 async def test_presubmit_rechecks_changed_funding(venues, settings, coordinator):
     """信号形成后资金费改变，下单前再算并拒绝，不能只检查深度价差。"""
     settings = replace(settings, funding_horizon_hours=D(8))
@@ -165,27 +124,6 @@ async def test_wss_funding_parsing_and_disconnect(settings):
     assert not hl.funding and not gate.funding
 
 
-async def test_spread_statistics_persist_bounded_and_separate(coordinator):
-    """不同 DEX 的统计独立保存；窗口历史有界且 status 可读最新值。"""
-    for value in range(4):
-        await coordinator.save_spread("gate", "hyperliquid:xyz", "HOOD", {"spread_bps": value}, 2)
-    await coordinator.save_spread("gate", "hyperliquid:io", "HOOD", {"spread_bps": 9}, 2)
-    assert len((await coordinator.snapshot())["spreads"]) == 2
-    assert await coordinator.redis.llen(coordinator.key("spread_history:gate|hyperliquid:xyz|HOOD")) == 2
-
-
-def test_new_config_validation(monkeypatch, tmp_path):
-    """资金费允许显式关闭，历史窗口必须容纳所需样本。"""
-    monkeypatch.setenv("FUNDING_HORIZON_HOURS", "0.5")
-    monkeypatch.setenv("SPREAD_WINDOW_SECONDS", "30")
-    monkeypatch.setenv("SPREAD_SAMPLE_SECONDS", "10")
-    monkeypatch.setenv("SPREAD_MIN_SAMPLES", "3")
-    assert load_settings(tmp_path / "none").funding_horizon_hours == D("0.5")
-    monkeypatch.setenv("SPREAD_MIN_SAMPLES", "4")
-    with pytest.raises(ValueError, match="Spread window"):
-        load_settings(tmp_path / "none")
-
-
 def test_stale_gate_schedule_blocks_even_with_fresh_rate(venues, settings):
     """WSS 费率再新也不能掩盖已过期的 Gate 结算日程。"""
     a, b = venues.values()
@@ -193,117 +131,6 @@ def test_stale_gate_schedule_blocks_even_with_fresh_rate(venues, settings):
     a.name = "gate"
     a.metadata_at = monotonic() - 121
     assert funding_cost_per_unit("BTC", a, b, replace(settings, funding_horizon_hours=D(8))) is None
-
-
-async def test_presubmit_uses_same_history_and_cannot_bypass(venues, settings, coordinator, monkeypatch):
-    """执行器必须使用已预热的同一策略历史；基准更新后原机会失效则两腿均不发送。"""
-    now = time()
-    monkeypatch.setattr("market_analysis.time", lambda: now)
-    settings = replace(
-        settings,
-        exchanges=("left", "right"),
-        spread_sample_seconds=1,
-        spread_window_seconds=60,
-        spread_min_samples=3,
-    )
-    a, b = venues.values()
-    strategy = ArbitrageStrategy(settings)
-    for stamp in (now - 4, now - 3, now - 2, now - 1):
-        strategy.history.observe((a.name, b.name, "BTC"), D(0), stamp)
-    opportunity = strategy.opportunity("BTC", a, b)
-    assert opportunity is not None
-    assert await ExecutionEngine(settings, venues, coordinator, "no-history").open(opportunity) is None
-    premium = strategy.premium("BTC", a, b)
-    strategy.history.rows.clear()
-    strategy.history.pending.clear()
-    for stamp in (now - 4, now - 3, now - 2, now - 1):
-        strategy.history.observe((a.name, b.name, "BTC"), premium, stamp)
-    assert (
-        await ExecutionEngine(settings, venues, coordinator, "changed-history", strategy).open(opportunity)
-        is None
-    )
-    assert not a.sent and not b.sent
-
-
-def test_changing_spread_does_not_require_deviation_from_mean(venues, settings, monkeypatch):
-    """当前价差等于历史均值也可交易，只要历史价差在变化且实际净收益达标。"""
-    now = time()
-    monkeypatch.setattr("market_analysis.time", lambda: now)
-    settings = replace(
-        settings,
-        spread_sample_seconds=1,
-        spread_window_seconds=60,
-        spread_min_samples=3,
-        spread_min_range_bps=D(5),
-    )
-    strategy = ArbitrageStrategy(settings)
-    a, b = venues.values()
-    current = strategy.premium("BTC", a, b)
-    for stamp, offset in zip((now - 4, now - 3, now - 2, now - 1), (-10, 0, 10, 0), strict=True):
-        strategy.history.observe((a.name, b.name, "BTC"), current + offset, stamp)
-    assert strategy.history.baseline((a.name, b.name, "BTC"), now) == current
-    assert strategy.candidate("BTC", a, b)
-    assert strategy.opportunity("BTC", a, b) is not None
-    # 小幅报价噪声不算有效变化。
-    strategy.settings = replace(settings, spread_min_range_bps=D(25))
-    strategy.history.settings = strategy.settings
-    assert not strategy.candidate("BTC", a, b)
-
-
-async def test_sqlite_history_survives_reopen_and_deduplicates(tmp_path, settings):
-    """SQLite 保留历史、不同 DEX 隔离，同一采样键重复写入只保留一份。"""
-    import asyncio
-    import sqlite3
-
-    from spread_store import SpreadStore
-
-    settings = replace(settings, spread_db_path=tmp_path / "spreads.sqlite3")
-    record = {
-        "left": "gate",
-        "right": "hyperliquid:xyz",
-        "base": "HOOD",
-        "sample_at": 100,
-        "spread_bps": D("10.123456789"),
-        "mean_bps": D(10),
-        "min_bps": D(9),
-        "max_bps": D(11),
-        "range_bps": D(2),
-        "samples": 3,
-        "timestamp": 110,
-    }
-    await SpreadStore(settings).save([record])
-    await asyncio.gather(
-        SpreadStore(settings).save([record]),
-        SpreadStore(settings).save([{**record, "right": "hyperliquid:io"}]),
-    )
-    connection = sqlite3.connect(settings.spread_db_path)
-    try:
-        rows = connection.execute(
-            "SELECT right_exchange, spread_bps FROM spread_samples ORDER BY right_exchange"
-        ).fetchall()
-        assert rows == [("hyperliquid:io", "10.123456789"), ("hyperliquid:xyz", "10.123456789")]
-    finally:
-        connection.close()
-
-
-@pytest.mark.parametrize(
-    "values,expected", [([95, 100, 95, 100], False), ([85, 95, 85, 95], True), ([-85, -95, -85, -95], True)]
-)
-def test_relative_change_filters_user_examples(values, expected):
-    """按 10% 相对门槛区分用户指定区间；负价差方向得到同样结果。"""
-    settings = Settings(
-        spread_min_samples=3,
-        spread_sample_seconds=1,
-        spread_window_seconds=60,
-        spread_min_range_bps=D(0),
-        spread_min_change_ratio=D("0.10"),
-    )
-    history = SpreadHistory(settings)
-    key = ("gate", "hyperliquid", "BTC")
-    for timestamp, value in zip((100, 101, 102, 103), values, strict=True):
-        record = history.observe(key, D(value), timestamp)
-    assert record["change_ratio"] >= 0
-    assert history.changing(key, D(values[-1]), 103) is expected
 
 
 def test_relative_change_zero_crossing_and_denominator_floor():
@@ -314,24 +141,3 @@ def test_relative_change_zero_crossing_and_denominator_floor():
     assert spread_change_ratio([D(-10), D(10)]) == 2
     assert spread_change_ratio([D(0), D(0)]) == 0
     assert spread_change_ratio([D("-0.01"), D("0.01")]) == D("0.02")
-
-
-async def test_change_ratio_saved_in_sqlite_payload(tmp_path, settings):
-    """新增比率随样本写入现有 payload，兼容已有 SQLite 表结构。"""
-    import json
-    import sqlite3
-
-    from spread_store import SpreadStore
-
-    settings = replace(
-        settings, spread_db_path=tmp_path / "ratio.sqlite3", spread_sample_seconds=1, spread_window_seconds=60
-    )
-    history = SpreadHistory(settings)
-    key = ("gate", "hyperliquid", "BTC")
-    history.observe(key, D(85), 100)
-    history.observe(key, D(95), 101)
-    row = history.observe(key, D(90), 102)
-    await SpreadStore(settings).save([{**row, "left": key[0], "right": key[1], "base": key[2]}])
-    with sqlite3.connect(settings.spread_db_path) as connection:
-        payload = json.loads(connection.execute("SELECT payload FROM spread_samples").fetchone()[0])
-    assert D(payload["change_ratio"]) == D(10) / D(90)

@@ -81,7 +81,7 @@ class ExecutionEngine:
                 raise ValidationError("Market moved outside order price protection")
             values.append(value)
             fees += venue.instruments[order.base].taker_fee
-        if self.settings.spread_window_seconds:
+        if self.settings.candle_lookback_bars:
             if self.strategy is None:
                 raise ValidationError("Spread history unavailable before submission")
             left, right = (self.exchanges[name] for name in self.settings.exchanges)

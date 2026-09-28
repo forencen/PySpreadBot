@@ -97,6 +97,26 @@ class Level:
 
 
 @dataclass(frozen=True)
+class Candle:
+    """统一 USD/基础币 OHLC；start 是 UTC 15 分钟桶起点的 Unix 秒。"""
+
+    start: int
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+
+    def valid(self) -> bool:
+        """拒绝错位时间、非有限/非正价格和内部不一致的 OHLC。"""
+        return (
+            self.start >= 0
+            and self.start % 900 == 0
+            and all(v.is_finite() and v > 0 for v in (self.open, self.high, self.low, self.close))
+            and self.low <= min(self.open, self.close) <= max(self.open, self.close) <= self.high
+        )
+
+
+@dataclass(frozen=True)
 class Funding:
     """单次结算费率、USD/基础币标记价和结算日程；正费率代表多头支付。"""
 
