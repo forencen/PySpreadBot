@@ -110,7 +110,7 @@ class GateExchange(Exchange):
         natives = [self.instruments[base].native for base in sorted(self.symbols)]
         for offset in range(0, len(natives), 50):
             for channel in ("futures.book_ticker", "futures.tickers"):
-                await self._subscription(channel, natives[offset : offset + 50])
+                await self._subscription(channel, natives[offset: offset + 50])
         for base in sorted(self.depth):
             await self._subscription("futures.obu", [self._stream(base)])
 
@@ -307,7 +307,7 @@ class GateExchange(Exchange):
             "X-Gate-Size-Decimal": "1",
         }
         async with self.session.get(
-            "https://api.gateio.ws" + path, headers=headers, proxy=self.settings.http_proxy
+                "https://api.gateio.ws" + path, headers=headers, proxy=self.settings.http_proxy
         ) as response:
             response.raise_for_status()
             data = await response.json()
@@ -329,6 +329,12 @@ class GateExchange(Exchange):
 
 
 if __name__ == "__main__":
-    from debug_gate import main
+    import asyncio
+    from config import load_settings
 
-    main(exchange_type=GateExchange)
+    gate = GateExchange(load_settings(".env", mode="observe"))
+    async def test():
+        await gate.initialize()
+        await gate.fetch_instruments()
+
+    asyncio.run(test())
